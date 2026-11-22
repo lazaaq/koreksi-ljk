@@ -150,7 +150,11 @@ class BlockDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("Atur blok")
         lay = QFormLayout(self)
-        self.kind = QComboBox(); self.kind.addItems(["Jawaban soal", "Nomor peserta (angka)", "Nama peserta (huruf A–Z)"])
+        self.kind = QComboBox(); self.kind.addItems(["Jawaban soal", "Nomor peserta (angka)", "Nama peserta (huruf A–Z)",
+                                                     "Isian lain (mis. ruang, no HP) — tidak dinilai"])
+        self.title = QLineEdit(); self.title.setPlaceholderText("mis. Ruang, No HP, Kode paket")
+        self.charset = QComboBox(); self.charset.addItems(["Angka 0–9", "Huruf A–Z"])
+        self.charset.currentIndexChanged.connect(lambda: self._update())
         self.rows = QSpinBox(); self.rows.setRange(1, 200); self.rows.setValue(max(rows, 1))
         self.cols = QSpinBox(); self.cols.setRange(1, 200); self.cols.setValue(max(cols, 1))
         self.orient = QComboBox()
@@ -165,6 +169,8 @@ class BlockDialog(QDialog):
         lay.setLabelAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         lay.setSpacing(12); lay.setContentsMargins(24, 22, 24, 20)
         lay.addRow("Jenis blok", self.kind)
+        lay.addRow("Nama isian", self.title)
+        lay.addRow("Isinya berupa", self.charset)
         lay.addRow("Jumlah baris bulatan", self.rows)
         lay.addRow("Jumlah kolom bulatan", self.cols)
         lay.addRow("Susunan", self.orient)
@@ -178,6 +184,7 @@ class BlockDialog(QDialog):
         lay.addRow(bb)
         for w in (self.kind, self.orient):
             w.currentIndexChanged.connect(self._update)
+        self.title.textChanged.connect(self._update)
         for w in (self.rows, self.cols):
             w.valueChanged.connect(self._update)
         # tebakan susunan: lebih banyak baris daripada kolom → tiap baris = 1 soal
@@ -187,7 +194,12 @@ class BlockDialog(QDialog):
     def _update(self):
         kind = self.kind.currentIndex()
         nomor = kind >= 1
-        if kind == 2:
+        isian = kind == 3
+        form = self.layout()
+        for w in (self.title, self.charset):
+            form.setRowVisible(w, isian)
+        huruf = (kind == 2) or (isian and self.charset.currentIndex() == 1)
+        if huruf:
             self.orient.setItemText(0, "Tiap BARIS = 1 huruf (A–Z ke samping)")
             self.orient.setItemText(1, "Tiap KOLOM = 1 huruf (A–Z ke bawah)")
         elif nomor:
@@ -200,8 +212,11 @@ class BlockDialog(QDialog):
         along_rows = self.orient.currentIndex() == 0
         n_ch = self.cols.value() if along_rows else self.rows.value()
         n_it = self.rows.value() if along_rows else self.cols.value()
-        self.labels.setText(omr.ALPHABET[:n_ch] if kind == 2 else (omr.DIGITS[:n_ch] if nomor else omr.LETTERS[:n_ch]))
-        if kind == 2:
+        self.labels.setText(omr.ALPHABET[:n_ch] if huruf else (omr.DIGITS[:n_ch] if nomor else omr.LETTERS[:n_ch]))
+        if isian:
+            self.info.setText(f"“{self.title.text().strip() or 'Isian'}”: {n_it} kolom isian, tiap kolom {n_ch} pilihan. "
+                              "Hanya dibaca dan dicatat di hasil & Excel, tidak dinilai.")
+        elif kind == 2:
             self.info.setText(f"Nama sampai {n_it} huruf, tiap huruf {n_ch} pilihan.")
         elif nomor:
             self.info.setText(f"{n_it} digit nomor peserta, tiap digit {n_ch} pilihan.")
@@ -210,7 +225,7 @@ class BlockDialog(QDialog):
                               f"masing-masing {n_ch} pilihan.")
 
     def values(self):
-        return dict(kind=["soal", "nomor", "nama"][self.kind.currentIndex()],
+        return dict(kind=["soal", "nomor", "nama", "isian"][self.kind.currentIndex()], title=self.title.text().strip(),
                     rows=self.rows.value(), cols=self.cols.value(),
                     items_along="rows" if self.orient.currentIndex() == 0 else "cols",
                     start=self.start.value(), labels=self.labels.text().strip())
@@ -221,7 +236,7 @@ class BlockDialog(QDialog):
 # =============================================================================
 class TemplateTab(QWidget):
     templatesChanged = Signal()
-    COLORS = {"soal": QColor(T.PRIMARY), "nomor": QColor(T.PURPLE), "nama": QColor("#0891B2")}
+    COLORS = {"soal": QColor(T.PRIMARY), "nomor": QColor(T.PURPLE), "nama": QColor("#0891B2"), "isian": QColor("#EA580C")}
 
     def __init__(self):
         super().__init__()
@@ -436,8 +451,12 @@ class TemplateTab(QWidget):
         if dlg.exec() != QDialog.Accepted:
             return
         v = dlg.values()
+        if v["kind"] == "isian" and not v["title"]:
+            QMessageBox.warning(self, APP_NAME, "Isi dulu nama isiannya, mis. “Ruang”."); return
+        if v["kind"] == "isian" and any(b.kind == "isian" and b.title.lower() == v["title"].lower() for b in self.tpl.blocks):
+            QMessageBox.warning(self, APP_NAME, f"Isian “{v['title']}” sudah ada. Pakai nama lain."); return
         b = omr.fit_block(self.bubbles, rect, v["rows"], v["cols"], v["kind"], v["items_along"], v["start"],
-                          v["labels"] or None)
+                          v["labels"] or None, title=v["title"])
         if len(b.labels) != b.n_choices:
             QMessageBox.warning(self, APP_NAME, f"Jumlah label ({len(b.labels)}) harus sama dengan jumlah pilihan ({b.n_choices})."); return
         if b.kind == "soal":
@@ -475,6 +494,8 @@ class TemplateTab(QWidget):
                 txt = f"Soal {b.start}–{b.start + b.n_items - 1}  ({b.n_choices} pilihan: {b.labels})"
             elif b.kind == "nama":
                 txt = f"Nama peserta  ({b.n_items} huruf)"
+            elif b.kind == "isian":
+                txt = f"{b.title}  ({b.n_items} kolom, tidak dinilai)"
             else:
                 txt = f"Nomor peserta  ({b.n_items} digit)"
             t = sc.addSimpleText(txt.split("  ")[0]); t.setBrush(col)
@@ -486,6 +507,7 @@ class TemplateTab(QWidget):
         has_nm = any(b.kind == "nama" for b in self.tpl.blocks)
         self.status.setText(f"{len(qs)} soal" + (f" (nomor {min(qs)}–{max(qs)})" if qs else "") +
                             (" · nomor peserta ✓" if has_id else "") + (" · nama peserta ✓" if has_nm else "") +
+                            "".join(f" · {b.title} ✓" for b in self.tpl.blocks if b.kind == "isian") +
                             ("" if has_id or has_nm else " · belum ada blok nomor/nama peserta (opsional)"))
 
     def save(self):
@@ -987,6 +1009,8 @@ class ResultsTab(QWidget):
         form.addWidget(self.f_ans, 3, 0, 1, 2)
         form.addWidget(label("Urut sesuai nomor soal.  “-” = kosong,  “*” = ganda.  Ubah huruf untuk membetulkan.", "hint", wrap=True), 4, 0, 1, 2)
         rc.lay.addLayout(form)
+        self.extra = label("", "hint", wrap=True); self.extra.setVisible(False)
+        rc.lay.addWidget(self.extra)
         self.flags = label("", "warn", wrap=True); self.flags.setVisible(False)
         rc.lay.addWidget(self.flags)
         self.view = ImageView(draw_enabled=False, placeholder="Pilih satu lembar di tabel untuk melihat hasilnya")
@@ -1069,6 +1093,9 @@ class ResultsTab(QWidget):
         self._enable_form(not r.get("error"))
         self.f_nomor.setText(r.get("nomor", "")); self.f_nama.setText(r.get("nama", ""))
         self.fname.setText(f"Nilai  ·  {r.get('label', '')}")
+        fx = r.get("fields") or {}
+        self.extra.setText("   ·   ".join(f"<b>{k}:</b> {v or '—'}" for k, v in fx.items()))
+        self.extra.setVisible(bool(fx))
         self.f_ans.setText(self.ans_str(r))
         self._show_flags(r)
         QApplication.setOverrideCursor(Qt.WaitCursor)
@@ -1191,38 +1218,46 @@ def export_excel(fn: str, st: ResultStore):
     ws["A1"] = "Rekap Nilai" + (f" — {st.tpl.name}" if st.tpl else ""); ws["A1"].font = Font(bold=True, size=14)
     pb, ps, pk = st.pts()
     ws["A2"] = f"Jumlah soal dinilai: {len(key)}  ·  Poin benar/salah/kosong: {pb:g} / {ps:g} / {pk:g}  ·  Dibuat {time.strftime('%d-%m-%Y %H:%M')}"
-    head = ["Peringkat", "Nomor Peserta", "Nama", "Benar", "Salah", "Kosong", "Skor", "Nilai", "Catatan", "Berkas"] + [str(q) for q in qs]
+    extra = [b.title or f"Isian {i + 1}" for i, b in enumerate(st.tpl.blocks) if b.kind == "isian"] if st.tpl else []
+    for r, _ in rows:
+        for k in (r.get("fields") or {}):
+            if k not in extra:
+                extra.append(k)
+    head = ["Peringkat", "Nomor Peserta", "Nama"] + extra + ["Benar", "Salah", "Kosong", "Skor", "Nilai", "Catatan", "Berkas"] + [str(q) for q in qs]
+    E = len(extra)
     HR = 4
     for c, h in enumerate(head, 1):
         cell = ws.cell(HR, c, h); cell.font = bold; cell.fill = PatternFill("solid", fgColor="DDE7EE")
         cell.alignment = Alignment(horizontal="center")
     ws.cell(HR + 1, 3, "KUNCI JAWABAN").font = bold
     for j, q in enumerate(qs):
-        c = ws.cell(HR + 1, 11 + j, key.get(q, "")); c.font = bold; c.alignment = Alignment(horizontal="center")
+        c = ws.cell(HR + 1, 11 + E + j, key.get(q, "")); c.font = bold; c.alignment = Alignment(horizontal="center")
     green = PatternFill("solid", fgColor="D3F9D8"); red = PatternFill("solid", fgColor="FFE3E3"); grey = PatternFill("solid", fgColor="F1F3F5")
     for i, (r, g) in enumerate(rows):
         R = HR + 2 + i
         note = []
         if st.needs_review(r):
             note.append("perlu dicek")
-        vals = [i + 1, r.get("nomor", ""), r.get("nama", ""), g["benar"], g["salah"], g["kosong"], g["skor"], g["nilai"],
-                ", ".join(note), r.get("label", "")]
+        fx = r.get("fields") or {}
+        vals = [i + 1, r.get("nomor", ""), r.get("nama", "")] + [fx.get(k, "") for k in extra] + [
+                g["benar"], g["salah"], g["kosong"], g["skor"], g["nilai"], ", ".join(note), r.get("label", "")]
         for c, v in enumerate(vals, 1):
             ws.cell(R, c, v)
         a = st.answers(r)
         for j, q in enumerate(qs):
             v = a.get(q, "")
-            cell = ws.cell(R, 11 + j, v or "-"); cell.alignment = Alignment(horizontal="center")
+            cell = ws.cell(R, 11 + E + j, v or "-"); cell.alignment = Alignment(horizontal="center")
             if q in key:
                 cell.fill = grey if not v else (green if v == key[q] else red)
     if rows:
         R = HR + 3 + len(rows)
         n = len(rows)
         ws.cell(R, 3, "Rata-rata").font = bold
-        ws.cell(R, 8, f"=ROUND(AVERAGE(H{HR + 2}:H{HR + 1 + n}),2)").font = bold
-        ws.cell(R + 1, 3, "Tertinggi").font = bold; ws.cell(R + 1, 8, f"=MAX(H{HR + 2}:H{HR + 1 + n})")
-        ws.cell(R + 2, 3, "Terendah").font = bold; ws.cell(R + 2, 8, f"=MIN(H{HR + 2}:H{HR + 1 + n})")
-    widths = [10, 15, 28, 7, 7, 8, 7, 8, 13, 22] + [4] * len(qs)
+        NC = 8 + E; L = get_column_letter(NC)
+        ws.cell(R, NC, f"=ROUND(AVERAGE({L}{HR + 2}:{L}{HR + 1 + n}),2)").font = bold
+        ws.cell(R + 1, 3, "Tertinggi").font = bold; ws.cell(R + 1, NC, f"=MAX({L}{HR + 2}:{L}{HR + 1 + n})")
+        ws.cell(R + 2, 3, "Terendah").font = bold; ws.cell(R + 2, NC, f"=MIN({L}{HR + 2}:{L}{HR + 1 + n})")
+    widths = [10, 15, 28] + [max(10, len(k) + 4) for k in extra] + [7, 7, 8, 7, 8, 13, 22] + [4] * len(qs)
     for c, w in enumerate(widths, 1):
         ws.column_dimensions[get_column_letter(c)].width = w
     ws.freeze_panes = ws.cell(HR + 2, 4)

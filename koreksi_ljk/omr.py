@@ -81,7 +81,7 @@ def normalize(gray: np.ndarray, width: int = REF_WIDTH) -> np.ndarray:
 # ----------------------------------------------------------------------------
 @dataclass
 class Block:
-    kind: str                 # "soal" | "nomor" | "nama"
+    kind: str                 # "soal" | "nomor" | "nama" | "isian" (isian lain, mis. ruang/no HP — tidak dinilai)
     rect: list[float]         # x, y, w, h (koordinat gambar template)
     rows: int
     cols: int
@@ -90,6 +90,7 @@ class Block:
     labels: str = "ABCDE"     # label pilihan (soal) atau "0123456789" (nomor)
     centers: list = field(default_factory=list)   # [rows][cols] -> [x, y]
     radius: list[float] = field(default_factory=lambda: [10.0, 10.0])  # rx, ry
+    title: str = ""           # nama isian (untuk kind="isian"), mis. "Ruang", "No HP"
 
     @property
     def n_items(self) -> int:
@@ -232,7 +233,7 @@ def _split_1d(vals: list[float], k: int) -> list[float] | None:
 
 
 def fit_block(bubbles, rect, rows: int, cols: int, kind: str, items_along: str,
-              start: int = 1, labels: str | None = None) -> Block:
+              start: int = 1, labels: str | None = None, title: str = "") -> Block:
     x0, y0, w, h = rect
     inside = [b for b in bubbles if x0 <= b[0] <= x0 + w and y0 <= b[1] <= y0 + h]
     xs = ys = None
@@ -250,10 +251,10 @@ def fit_block(bubbles, rect, rows: int, cols: int, kind: str, items_along: str,
         ys = [y0 + (i + 0.5) * h / rows for i in range(rows)]
     if labels is None:
         n_ch = cols if items_along == "rows" else rows
-        labels = DIGITS[:n_ch] if kind == "nomor" else (ALPHABET[:n_ch] if kind == "nama" else LETTERS[:n_ch])
+        labels = DIGITS[:n_ch] if kind in ("nomor", "isian") else (ALPHABET[:n_ch] if kind == "nama" else LETTERS[:n_ch])
     centers = [[[xs[j], ys[i]] for j in range(cols)] for i in range(rows)]
     return Block(kind=kind, rect=[float(v) for v in rect], rows=rows, cols=cols, items_along=items_along,
-                 start=start, labels=labels, centers=centers, radius=[rx, ry])
+                 start=start, labels=labels, centers=centers, radius=[rx, ry], title=title)
 
 
 def guess_grid(bubbles, rect) -> tuple[int, int]:
@@ -388,6 +389,7 @@ class SheetResult:
     page: int = 0
     nomor: str = ""
     nama_lembar: str = ""                         # nama dari bulatan huruf (bila ada blok nama)
+    fields: dict = field(default_factory=dict)    # isian lain {judul: nilai}, mis. {"Ruang": "01"}
     answers: dict = field(default_factory=dict)   # {nomor_soal: "A" | "" (kosong) | "*" (ganda)}
     flags: dict = field(default_factory=dict)     # {nomor_soal: alasan}
     nomor_flag: str = ""
@@ -467,11 +469,15 @@ def read_aligned(aligned: np.ndarray, tpl: Template, file: str = "", label: str 
                     res.flags[q] = flag
             elif b.kind == "nama":
                 letters.append(val if val not in ("", "*") else " ")
+            elif b.kind == "isian":
+                key_ = b.title or f"Isian {bi + 1}"
+                res.fields[key_] = res.fields.get(key_, "") + (val if val not in ("", "*") else ("?" if val == "*" else "_"))
             else:
                 digits.append(val if val not in ("", "*") else ("?" if val == "*" else "_"))
                 if flag and not res.nomor_flag:
                     res.nomor_flag = "nomor peserta " + flag
     res.nama_lembar = " ".join("".join(letters).split())
+    res.fields = {k: v.strip("_") for k, v in res.fields.items()}
     res.nomor = "".join(digits).strip("_")  # kolom kosong di depan/belakang = nomor lebih pendek
     if not res.nomor:
         res.nomor = ""  # nomor tidak diisi sama sekali
@@ -554,7 +560,7 @@ def annotate(aligned: np.ndarray, res: SheetResult, key: dict[int, str]) -> np.n
     GREEN, RED, BLUE, ORANGE, PURPLE = (74, 163, 22), (38, 38, 220), (235, 99, 37), (6, 119, 217), (234, 51, 147)  # BGR
     for (x, y, rx, ry, kind, item, lab, fill) in res.marks:
         c = (int(round(x)), int(round(y))); ax = (int(rx * 1.35), int(ry * 1.35))
-        if kind in ("nomor", "nama"):
+        if kind in ("nomor", "nama", "isian"):
             if fill >= res.threshold:
                 cv2.ellipse(img, c, ax, 0, 0, 360, PURPLE, 3)
             continue

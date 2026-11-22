@@ -513,7 +513,7 @@ def grade(answers: dict[int, str], key: dict[int, str], pts=(1.0, 0.0, 0.0)) -> 
 # ----------------------------------------------------------------------------
 def annotate(aligned: np.ndarray, res: SheetResult, key: dict[int, str]) -> np.ndarray:
     img = cv2.cvtColor(aligned, cv2.COLOR_GRAY2BGR)
-    GREEN, RED, BLUE, ORANGE, PURPLE = (60, 150, 40), (40, 50, 200), (190, 110, 30), (0, 140, 230), (160, 60, 150)
+    GREEN, RED, BLUE, ORANGE, PURPLE = (74, 163, 22), (38, 38, 220), (235, 99, 37), (6, 119, 217), (234, 51, 147)  # BGR
     for (x, y, rx, ry, kind, item, lab, fill) in res.marks:
         c = (int(round(x)), int(round(y))); ax = (int(rx * 1.35), int(ry * 1.35))
         if kind == "nomor":

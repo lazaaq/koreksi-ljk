@@ -9,7 +9,7 @@ from koreksi_ljk import app as A, omr
 
 D = Path(__file__).parent / "data"; OUT = Path(sys.argv[1] if len(sys.argv) > 1 else "/tmp/shots"); OUT.mkdir(exist_ok=True)
 QApplication.setOrganizationName("LanaAqilTest"); QApplication.setApplicationName("Koreksi LJK Test")
-qa = QApplication([])
+qa = QApplication([]); A.T.apply(qa)
 shutil.rmtree(A.templates_dir(), ignore_errors=True)
 (D / "scans" / A.RESULT_FILE).unlink(missing_ok=True)
 w = A.MainWindow(); w.resize(1360, 860); w.show()
@@ -41,7 +41,7 @@ r = w.t_res
 r.table.selectRow(0); qa.processEvents()
 # pilih lembar yang punya tanda
 for row in range(r.table.rowCount()):
-    if r.table.item(row, 0).text() == "⚠":
+    if r.table.item(row, 0).text() == "Perlu dicek":
         r.table.selectRow(row); break
 qa.processEvents(); r.view.fit(); qa.processEvents()
 w.grab().save(str(OUT / "3_hasil.png"))

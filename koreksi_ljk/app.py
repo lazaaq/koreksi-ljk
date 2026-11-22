@@ -272,14 +272,20 @@ class TemplateTab(QWidget):
         self.view = ImageView(draw_enabled=True, placeholder="Pilih atau buat template")
         self.view.rectDrawn.connect(self.add_block)
         self.b_fit.clicked.connect(self.view.fit)
-        editor.lay.addWidget(self.view, 1)
-        bl = QHBoxLayout(); bl.setSpacing(10)
-        self.blocks = QListWidget(); self.blocks.setMaximumHeight(130)
-        bl.addWidget(self.blocks, 1)
-        b_rm = button("Hapus blok", "danger", slot=self.remove_block)
-        bl.addWidget(b_rm, 0, Qt.AlignTop)
-        editor.lay.addLayout(bl)
-        self.status = label("", "hint", wrap=True); editor.lay.addWidget(self.status)
+        body = QHBoxLayout(); body.setSpacing(16)
+        bcol = QVBoxLayout(); bcol.setSpacing(8)
+        bcol.addWidget(label("Blok", "label"))
+        self.blocks = QListWidget(); self.blocks.setWordWrap(True)
+        self.blocks.currentRowChanged.connect(self._highlight_block)
+        self._rect_items = []
+        self.blocks.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        bcol.addWidget(self.blocks, 1)
+        self.status = label("", "hint", wrap=True); bcol.addWidget(self.status)
+        bcol.addWidget(button("Hapus blok", "danger", slot=self.remove_block))
+        bw = QWidget(); bw.setLayout(bcol); bw.setFixedWidth(250)
+        bcol.setContentsMargins(0, 0, 0, 0)
+        body.addWidget(bw); body.addWidget(self.view, 1)
+        editor.lay.addLayout(body, 1)
 
         lay = QHBoxLayout(self); lay.setContentsMargins(24, 20, 24, 24); lay.setSpacing(20)
         lay.addWidget(side); lay.addWidget(editor, 1)
@@ -469,12 +475,13 @@ class TemplateTab(QWidget):
         pen = QPen(QColor(120, 120, 120, 160), 1); pen.setCosmetic(True)
         for (x, y, w, h) in self.bubbles:
             sc.addEllipse(x - w / 2, y - h / 2, w, h, pen)
-        self.blocks.clear()
+        self.blocks.blockSignals(True); self.blocks.clear(); self.blocks.blockSignals(False)
+        self._rect_items = []
         for b in self.tpl.blocks:
             col = self.COLORS[b.kind]
             p = QPen(col, 2); p.setCosmetic(True)
             fill = QColor(col); fill.setAlpha(28)
-            sc.addRect(QRectF(*b.rect), p, QBrush(fill))
+            self._rect_items.append((sc.addRect(QRectF(*b.rect), p, QBrush(fill)), col))
             dot = QBrush(col); rx, ry = b.radius
             for row in b.centers:
                 for (x, y) in row:
@@ -497,6 +504,14 @@ class TemplateTab(QWidget):
         has_nm = any(b.kind == "nama" for b in self.tpl.blocks)
         self.status.setText(f"{len(qs)} soal" + (" · nomor ✓" if has_id else "") + (" · nama ✓" if has_nm else "") +
                             "".join(f" · {b.title} ✓" for b in self.tpl.blocks if b.kind == "isian"))
+
+    def _highlight_block(self, row):
+        for i, (it, col) in enumerate(self._rect_items):
+            p = QPen(col, 5 if i == row else 2); p.setCosmetic(True)
+            f = QColor(col); f.setAlpha(70 if i == row else 28)
+            it.setPen(p); it.setBrush(QBrush(f))
+        if 0 <= row < len(self._rect_items):
+            self.view.ensureVisible(self._rect_items[row][0], 40, 40)
 
     def save(self):
         if not self.tpl:

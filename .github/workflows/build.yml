@@ -1,0 +1,65 @@
+name: Build aplikasi
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: pip install -r requirements-dev.txt
+      - name: Uji akurasi pembacaan (LJK sintetis)
+        run: |
+          python tests/make_synthetic.py tests/data
+          python tests/test_accuracy.py
+          python tests/test_stress.py
+
+  build:
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            label: Windows
+          - os: macos-15
+            label: macOS-AppleSilicon
+          - os: macos-15-intel
+            label: macOS-Intel
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: pip install -r requirements-dev.txt
+      - name: PyInstaller
+        run: >
+          pyinstaller --noconfirm --clean --windowed --name "Koreksi LJK"
+          --collect-submodules pymupdf --exclude-module onnxruntime --exclude-module PIL --exclude-module tkinter
+          --osx-bundle-identifier id.lanaaqil.koreksiljk
+          run.py
+      - name: Kemas (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: Compress-Archive -Path "dist/Koreksi LJK" -DestinationPath "Koreksi-LJK-${{ matrix.label }}.zip"
+      - name: Kemas (macOS)
+        if: runner.os == 'macOS'
+        run: ditto -c -k --keepParent "dist/Koreksi LJK.app" "Koreksi-LJK-${{ matrix.label }}.zip"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Koreksi-LJK-${{ matrix.label }}
+          path: Koreksi-LJK-${{ matrix.label }}.zip
+      - name: Lampirkan ke Release (saat push tag v*)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: Koreksi-LJK-${{ matrix.label }}.zip

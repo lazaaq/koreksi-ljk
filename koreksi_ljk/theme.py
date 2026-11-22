@@ -220,3 +220,19 @@ def page_header(title: str, subtitle: str) -> QWidget:
     w = QWidget(); l = QVBoxLayout(w); l.setContentsMargins(0, 0, 0, 4); l.setSpacing(4)
     l.addWidget(label(title, "pageTitle")); l.addWidget(label(subtitle, "pageSub", wrap=True))
     return w
+
+
+def clickable(root: QWidget):
+    """Kursor tangan untuk semua elemen yang bisa diklik di bawah root."""
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import (QAbstractButton, QComboBox, QListWidget, QTabBar, QTableWidget, QHeaderView,
+                                   QTabWidget)
+    for w in [root] + root.findChildren(QWidget):
+        if isinstance(w, (QAbstractButton, QComboBox, QTabBar)):
+            w.setCursor(Qt.PointingHandCursor)
+            if isinstance(w, QComboBox):
+                w.view().viewport().setCursor(Qt.PointingHandCursor)
+        elif isinstance(w, (QListWidget, QTableWidget)):
+            w.viewport().setCursor(Qt.PointingHandCursor)
+        elif isinstance(w, QHeaderView) and w.sectionsClickable():
+            w.setCursor(Qt.PointingHandCursor)

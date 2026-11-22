@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
 from . import omr
 from . import theme as T
 from .theme import Card, button, label, set_role, page_header
+from .guide import GuideDialog
 from . import __version__
 
 APP_NAME = "Koreksi LJK"
@@ -180,6 +181,7 @@ class BlockDialog(QDialog):
         bb = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         bb.button(QDialogButtonBox.Ok).setText("Tambah blok"); bb.button(QDialogButtonBox.Ok).setProperty("kind", "primary")
         bb.button(QDialogButtonBox.Cancel).setText("Batal")
+        T.clickable(self)
         bb.accepted.connect(self.accept); bb.rejected.connect(self.reject)
         lay.addRow(bb)
         for w in (self.kind, self.orient):
@@ -214,8 +216,7 @@ class BlockDialog(QDialog):
         n_it = self.rows.value() if along_rows else self.cols.value()
         self.labels.setText(omr.ALPHABET[:n_ch] if huruf else (omr.DIGITS[:n_ch] if nomor else omr.LETTERS[:n_ch]))
         if isian:
-            self.info.setText(f"“{self.title.text().strip() or 'Isian'}”: {n_it} kolom isian, tiap kolom {n_ch} pilihan. "
-                              "Hanya dibaca dan dicatat di hasil & Excel, tidak dinilai.")
+            self.info.setText(f"{self.title.text().strip() or 'Isian'}: {n_it} kolom × {n_ch} pilihan · tidak dinilai")
         elif kind == 2:
             self.info.setText(f"Nama sampai {n_it} huruf, tiap huruf {n_ch} pilihan.")
         elif nomor:
@@ -246,42 +247,32 @@ class TemplateTab(QWidget):
         self.dirty = False
 
         # panel kiri: daftar template + panduan
-        side = Card("Template tersimpan")
+        side = Card("Template")
         self.list = QListWidget(); self.list.currentItemChanged.connect(self._open_selected)
+        self.list.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff); self.list.setWordWrap(True)
         side.lay.addWidget(self.list, 1)
-        side.lay.addWidget(button("＋  Template baru dari LJK kosong", "primary", slot=self.new_template))
-        side.lay.addWidget(button("Tidak punya LJK kosong? Pakai scan terisi…", slot=self.new_from_filled))
+        side.lay.addWidget(button("Template dari LJK Kosong", "primary", slot=self.new_template))
+        side.lay.addWidget(button("Template Tanpa LJK Kosong", slot=self.new_from_filled))
         io = QHBoxLayout(); io.setSpacing(8)
-        io.addWidget(button("Impor…", slot=self.import_template)); io.addWidget(button("Ekspor…", slot=self.export_template))
+        io.addWidget(button("Impor", slot=self.import_template)); io.addWidget(button("Ekspor", slot=self.export_template))
+        io.addWidget(button("Hapus", "danger", slot=self.delete_template))
         side.lay.addLayout(io)
-        side.lay.addWidget(button("Hapus template", "danger", slot=self.delete_template))
-        help_ = label(
-            "<b>Cara membuat template</b><ol style='margin:6px 0 0 -22px; line-height:150%'>"
-            "<li>Scan satu LJK <b>kosong</b>.</li>"
-            "<li>Klik <b>Template baru</b>, pilih hasil scan.</li>"
-            "<li><b>Tarik kotak</b> di sekeliling satu kelompok bulatan soal, isi keterangannya.</li>"
-            "<li>Ulangi untuk kelompok lain & <b>nomor peserta</b>.</li>"
-            "<li>Pastikan titik biru tepat di tengah bulatan, lalu <b>Simpan</b>.</li></ol>",
-            "info", wrap=True)
-        side.lay.addWidget(help_)
-        side.setFixedWidth(330)
+        side.setFixedWidth(300)
 
         # panel kanan: editor
         editor = Card()
         top = QHBoxLayout(); top.setSpacing(10)
-        top.addWidget(label("Nama template", "label"))
-        self.name = QLineEdit(); self.name.setPlaceholderText("mis. Try Out Bimbel — 50 soal")
+        self.name = QLineEdit(); self.name.setPlaceholderText("Nama template")
         self.name.textChanged.connect(lambda: self._set_dirty())
         top.addWidget(self.name, 1)
-        self.b_fit = button("Paskan layar"); top.addWidget(self.b_fit)
-        self.b_save = button("Simpan template", "primary", slot=self.save)
+        self.b_fit = button("Paskan"); top.addWidget(self.b_fit)
+        self.b_save = button("Simpan", "primary", slot=self.save)
         top.addWidget(self.b_save)
         editor.lay.addLayout(top)
-        self.view = ImageView(draw_enabled=True, placeholder="Buat template baru atau pilih template di sebelah kiri")
+        self.view = ImageView(draw_enabled=True, placeholder="Pilih atau buat template")
         self.view.rectDrawn.connect(self.add_block)
         self.b_fit.clicked.connect(self.view.fit)
         editor.lay.addWidget(self.view, 1)
-        editor.lay.addWidget(label("Tarik kotak dengan klik kiri  ·  roda mouse = zoom  ·  klik kanan + tarik = geser", "hint"))
         bl = QHBoxLayout(); bl.setSpacing(10)
         self.blocks = QListWidget(); self.blocks.setMaximumHeight(130)
         bl.addWidget(self.blocks, 1)
@@ -355,7 +346,7 @@ class TemplateTab(QWidget):
         self.name.blockSignals(True); self.name.setText(self.tpl.name); self.name.blockSignals(False)
         self.list.blockSignals(True); self.list.clearSelection(); self.list.setCurrentItem(None); self.list.blockSignals(False)
         self._enable(True); self.redraw(fit=True); self._set_dirty(True)
-        self.status.setText(f"{len(self.bubbles)} bulatan terdeteksi. Sekarang tarik kotak di sekeliling tiap kelompok bulatan.")
+        self.status.setText(f"{len(self.bubbles)} bulatan terdeteksi · tarik kotak untuk menandai")
 
     def _start_new(self, img, name):
         self.tpl = omr.Template(name=name, ref_path="")
@@ -365,7 +356,7 @@ class TemplateTab(QWidget):
         self.name.blockSignals(True); self.name.setText(self.tpl.name); self.name.blockSignals(False)
         self.list.blockSignals(True); self.list.clearSelection(); self.list.setCurrentItem(None); self.list.blockSignals(False)
         self._enable(True); self.redraw(fit=True); self._set_dirty(True)
-        self.status.setText(f"{len(self.bubbles)} bulatan terdeteksi. Sekarang tarik kotak di sekeliling tiap kelompok bulatan.")
+        self.status.setText(f"{len(self.bubbles)} bulatan terdeteksi · tarik kotak untuk menandai")
 
     def new_from_filled(self):
         if not self._confirm_discard():
@@ -386,8 +377,7 @@ class TemplateTab(QWidget):
             QMessageBox.warning(self, APP_NAME, f"Gagal: {e}"); return
         QApplication.restoreOverrideCursor()
         self._start_new(blank, Path(d).name)
-        self.status.setText(f"LJK kosong disusun dari {len(imgs)} scan (isian siswa dihapus otomatis). "
-                            f"{len(self.bubbles)} bulatan terdeteksi — tarik kotak di sekeliling tiap kelompok bulatan.")
+        self.status.setText(f"Disusun dari {len(imgs)} scan · {len(self.bubbles)} bulatan · tarik kotak untuk menandai")
 
     def export_template(self):
         if not self.tpl_dir:
@@ -505,10 +495,8 @@ class TemplateTab(QWidget):
         qs = self.tpl.question_numbers()
         has_id = any(b.kind == "nomor" for b in self.tpl.blocks)
         has_nm = any(b.kind == "nama" for b in self.tpl.blocks)
-        self.status.setText(f"{len(qs)} soal" + (f" (nomor {min(qs)}–{max(qs)})" if qs else "") +
-                            (" · nomor peserta ✓" if has_id else "") + (" · nama peserta ✓" if has_nm else "") +
-                            "".join(f" · {b.title} ✓" for b in self.tpl.blocks if b.kind == "isian") +
-                            ("" if has_id or has_nm else " · belum ada blok nomor/nama peserta (opsional)"))
+        self.status.setText(f"{len(qs)} soal" + (" · nomor ✓" if has_id else "") + (" · nama ✓" if has_nm else "") +
+                            "".join(f" · {b.title} ✓" for b in self.tpl.blocks if b.kind == "isian"))
 
     def save(self):
         if not self.tpl:
@@ -521,7 +509,7 @@ class TemplateTab(QWidget):
         self.tpl.save(d)
         self.tpl_dir = d; self._set_dirty(False)
         self.reload_list(select=str(d)); self.templatesChanged.emit()
-        self.status.setText("Template tersimpan ✓  — lanjut ke tab “Koreksi”.")
+        self.status.setText("Tersimpan ✓")
 
 
 # =============================================================================
@@ -593,22 +581,21 @@ class GradeTab(QWidget):
         mono.setPixelSize(15)
 
         # 1. template & kunci
-        c1 = Card("Template & kunci jawaban", step=1)
-        c1.lay.addWidget(label("Template LJK", "label"))
+        c1 = Card("Template & kunci", step=1)
         self.tpl_combo = QComboBox(); self.tpl_combo.currentIndexChanged.connect(self._tpl_changed)
         c1.lay.addWidget(self.tpl_combo)
         c1.lay.addSpacing(4)
         kh = QHBoxLayout(); kh.addWidget(label("Kunci jawaban", "label")); kh.addStretch()
-        kh.addWidget(button("Baca kunci dari scan LJK…", "ghost", slot=self.key_from_scan))
+        kh.addWidget(button("Baca dari scan", "ghost", slot=self.key_from_scan))
         c1.lay.addLayout(kh)
         self.key = QPlainTextEdit()
-        self.key.setPlaceholderText("Ketik berurutan, mis.  ABCDE ABCDE …\natau per nomor:  1.A  2.C  3.E …")
+        self.key.setPlaceholderText("ABCDA …  atau  1.A 2.C …")
         self.key.textChanged.connect(self._key_changed)
         self.key.setFont(mono); self.key.setFixedHeight(110)
         c1.lay.addWidget(self.key)
         self.key_info = label("", "hint", wrap=True); c1.lay.addWidget(self.key_info)
         c1.lay.addSpacing(4)
-        c1.lay.addWidget(label("Poin per jawaban", "label"))
+        c1.lay.addWidget(label("Poin", "label"))
         self.pb = QDoubleSpinBox(); self.ps = QDoubleSpinBox(); self.pk = QDoubleSpinBox()
         pts = QHBoxLayout(); pts.setSpacing(16)
         for lab, w, v in (("Benar", self.pb, 1), ("Salah", self.ps, 0), ("Kosong", self.pk, 0)):
@@ -619,21 +606,20 @@ class GradeTab(QWidget):
             pts.addLayout(col)
         pts.addStretch()
         c1.lay.addLayout(pts)
-        c1.lay.addWidget(label("Nilai = skor ÷ (jumlah soal × poin benar) × 100. Untuk sistem minus, isi poin salah mis. −1.", "hint", wrap=True))
 
         # 2. siswa
-        c2 = Card("Daftar siswa", "Opsional. Nama siswa akan terisi otomatis dari nomor peserta yang dihitamkan di LJK.", step=2)
+        c2 = Card("Daftar siswa (opsional)", step=2)
         self.students = QPlainTextEdit()
-        self.students.setPlaceholderText("Satu siswa per baris:  nomor peserta, nama\n000123, Andi Pratama")
+        self.students.setPlaceholderText("nomor, nama")
         self.students.setFixedHeight(100)
         c2.lay.addWidget(self.students)
-        c2.lay.addWidget(button("Impor dari Excel / CSV…", slot=self.import_students), 0, Qt.AlignLeft)
+        c2.lay.addWidget(button("Impor Excel / CSV", slot=self.import_students), 0, Qt.AlignLeft)
 
         # 3. folder
-        c3 = Card("Folder scan LJK siswa", "Semua gambar (JPG, PNG, TIFF) dan PDF di folder ini akan dikoreksi.", step=3)
+        c3 = Card("Folder scan", step=3)
         h3 = QHBoxLayout(); h3.setSpacing(10)
-        self.folder = QLineEdit(); self.folder.setPlaceholderText("Belum ada folder dipilih")
-        h3.addWidget(self.folder, 1); h3.addWidget(button("Pilih folder…", slot=self.pick_folder))
+        self.folder = QLineEdit(); self.folder.setPlaceholderText("Pilih folder")
+        h3.addWidget(self.folder, 1); h3.addWidget(button("Pilih", slot=self.pick_folder))
         c3.lay.addLayout(h3)
 
         self.b_go = button("Mulai koreksi", "primary", "lg", slot=self.start)
@@ -642,7 +628,6 @@ class GradeTab(QWidget):
 
         col = QWidget(); col.setMaximumWidth(860)
         v = QVBoxLayout(col); v.setContentsMargins(0, 0, 0, 0); v.setSpacing(16)
-        v.addWidget(page_header("Koreksi satu folder", "Pilih template, isi kunci jawaban, lalu pilih folder berisi hasil scan LJK siswa."))
         for w in (c1, c2, c3):
             v.addWidget(w)
         go = QHBoxLayout(); go.addWidget(self.b_go); go.addStretch(); v.addLayout(go)
@@ -702,18 +687,17 @@ class GradeTab(QWidget):
     def _key_changed(self):
         tpl = self.template()
         if not tpl:
-            self.key_info.setText("Belum ada template. Buat dulu di tab “Template”."); set_role(self.key_info, "error")
+            self.key_info.setText("Belum ada template"); set_role(self.key_info, "error")
             return
         qs = tpl.question_numbers(); k = self.key_dict()
         miss = [q for q in qs if q not in k]
         if not k:
-            self.key_info.setText(f"Template ini berisi {len(qs)} soal."); set_role(self.key_info, "hint")
+            self.key_info.setText(f"{len(qs)} soal"); set_role(self.key_info, "hint")
         elif miss:
-            self.key_info.setText(f"Kunci baru {len(k)} dari {len(qs)} soal. Belum ada: "
-                                  f"{', '.join(map(str, miss[:12]))}{'…' if len(miss) > 12 else ''}. Soal tanpa kunci tidak dinilai.")
-            set_role(self.key_info, "warn")
+            self.key_info.setText(f"{len(k)} dari {len(qs)} soal dinilai")
+            set_role(self.key_info, "hint")
         else:
-            self.key_info.setText(f"✓  Kunci lengkap: {len(k)} soal"); set_role(self.key_info, "ok")
+            self.key_info.setText(f"✓  {len(k)} soal"); set_role(self.key_info, "ok")
 
     def key_from_scan(self):
         tpl = self.template()
@@ -960,7 +944,7 @@ class ResultsTab(QWidget):
         th = QHBoxLayout(); th.addWidget(label("Hasil koreksi", "cardTitle")); th.addStretch()
         self.summary = label("", "hint"); th.addWidget(self.summary)
         lc.lay.addLayout(th)
-        self.only = QCheckBox("Tampilkan hanya yang perlu dicek"); self.only.toggled.connect(self.refresh)
+        self.only = QCheckBox("Hanya yang perlu dicek"); self.only.toggled.connect(self.refresh)
         lc.lay.addWidget(self.only)
         self.table = QTableWidget(0, len(self.COLS))
         self.table.setHorizontalHeaderLabels(self.COLS)
@@ -981,7 +965,7 @@ class ResultsTab(QWidget):
         self.table.itemSelectionChanged.connect(self.show_selected)
         lc.lay.addWidget(self.table, 1)
         bot = QHBoxLayout(); bot.setSpacing(10)
-        bot.addWidget(button("Buka hasil lama…", slot=self.open_previous)); bot.addStretch()
+        bot.addWidget(button("Buka hasil lama", slot=self.open_previous)); bot.addStretch()
         self.b_x = button("Ekspor ke Excel", "primary", slot=self.export); bot.addWidget(self.b_x)
         lc.lay.addLayout(bot)
 
@@ -1005,19 +989,18 @@ class ResultsTab(QWidget):
         form.addWidget(label("Nomor peserta", "label"), 0, 0); form.addWidget(label("Nama", "label"), 0, 1)
         form.addWidget(self.f_nomor, 1, 0); form.addWidget(self.f_nama, 1, 1)
         form.setColumnStretch(0, 1); form.setColumnStretch(1, 2)
-        form.addWidget(label("Jawaban terbaca", "label"), 2, 0, 1, 2)
+        form.addWidget(label("Jawaban  ( - kosong · * ganda )", "label"), 2, 0, 1, 2)
         form.addWidget(self.f_ans, 3, 0, 1, 2)
-        form.addWidget(label("Urut sesuai nomor soal.  “-” = kosong,  “*” = ganda.  Ubah huruf untuk membetulkan.", "hint", wrap=True), 4, 0, 1, 2)
         rc.lay.addLayout(form)
         self.extra = label("", "hint", wrap=True); self.extra.setVisible(False)
         rc.lay.addWidget(self.extra)
         self.flags = label("", "warn", wrap=True); self.flags.setVisible(False)
         rc.lay.addWidget(self.flags)
-        self.view = ImageView(draw_enabled=False, placeholder="Pilih satu lembar di tabel untuk melihat hasilnya")
+        self.view = ImageView(draw_enabled=False, placeholder="Pilih lembar di tabel")
         rc.lay.addWidget(self.view, 1)
         leg = QLabel(f"<span style='color:{T.SUCCESS}'>●</span> benar &nbsp;&nbsp; <span style='color:{T.DANGER}'>●</span> salah &nbsp;&nbsp; "
-                     f"<span style='color:{T.PRIMARY}'>●</span> kunci seharusnya &nbsp;&nbsp; <span style='color:{T.WARNING}'>●</span> kosong / ganda / ragu &nbsp;&nbsp; "
-                     f"<span style='color:{T.PURPLE}'>●</span> nomor peserta")
+                     f"<span style='color:{T.PRIMARY}'>●</span> kunci &nbsp;&nbsp; <span style='color:{T.WARNING}'>●</span> cek &nbsp;&nbsp; "
+                     f"<span style='color:{T.PURPLE}'>●</span> identitas")
         leg.setProperty("role", "hint"); rc.lay.addWidget(leg)
         for w in (self.f_nomor, self.f_nama, self.f_ans):
             w.editingFinished.connect(self.save_edit)
@@ -1310,8 +1293,10 @@ class MainWindow(QMainWindow):
         logo.setStyleSheet(f"background:{T.PRIMARY};color:white;border-radius:10px;font-size:20px;font-weight:800;")
         hl.addWidget(logo); hl.addSpacing(10)
         tl = QVBoxLayout(); tl.setSpacing(0)
-        tl.addWidget(label(APP_NAME, "appTitle")); tl.addWidget(label("Koreksi lembar jawaban otomatis dari hasil scan", "appSub"))
-        hl.addLayout(tl); hl.addStretch(); hl.addWidget(label(f"Versi {__version__}", "hint"))
+        tl.addWidget(label(APP_NAME, "appTitle"))
+        hl.addLayout(tl); hl.addStretch()
+        hl.addWidget(label(f"v{__version__}", "hint")); hl.addSpacing(8)
+        hl.addWidget(button("?  Panduan", slot=lambda: GuideDialog(self, self.tabs.currentIndex()).exec()))
         central = QWidget(); central.setObjectName("Page")
         cl = QVBoxLayout(central); cl.setContentsMargins(0, 0, 0, 0); cl.setSpacing(0)
         cl.addWidget(header); cl.addWidget(self.tabs, 1)
@@ -1324,6 +1309,7 @@ class MainWindow(QMainWindow):
         self.store.grader = self.t_grade
         if self.t_grade.tpl_combo.count():
             self.tabs.setCurrentWidget(self.t_grade)
+        T.clickable(self)
 
     def closeEvent(self, e):
         if self.t_tpl.dirty and QMessageBox.question(self, APP_NAME, "Template belum disimpan. Tetap keluar?") != QMessageBox.Yes:

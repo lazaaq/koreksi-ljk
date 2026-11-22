@@ -22,9 +22,10 @@ import cv2
 import numpy as np
 
 REF_WIDTH = 1700  # lebar kerja (px) — setara A4 ±200 dpi
-IMAGE_EXT = {".jpg", ".jpeg", ".png", ".tif", ".tiff", ".bmp", ".webp"}
+IMAGE_EXT = {".jpg", ".jpeg", ".png", ".tif", ".tiff", ".bmp", ".webp", ".gif"}
 PDF_EXT = {".pdf"}
 LETTERS = "ABCDEFGHIJ"
+ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 DIGITS = "0123456789"
 
 
@@ -52,6 +53,15 @@ def load_pages(path: str | Path, dpi: int = 200) -> list[tuple[str, np.ndarray]]
         return out
     data = np.fromfile(str(path), dtype=np.uint8)  # aman untuk nama berkas non-ASCII di Windows
     img = cv2.imdecode(data, cv2.IMREAD_GRAYSCALE)
+    if img is None:  # mis. GIF pada OpenCV lama → pakai MuPDF
+        try:
+            import pymupdf
+            pix = pymupdf.Pixmap(str(path))
+            if pix.n != 1:
+                pix = pymupdf.Pixmap(pymupdf.csGRAY, pix)
+            img = np.frombuffer(pix.samples, np.uint8).reshape(pix.height, pix.width, pix.n)[:, :, 0].copy()
+        except Exception:
+            img = None
     if img is None:
         raise ValueError("Berkas gambar tidak bisa dibuka")
     return [(path.name, img)]
@@ -71,7 +81,7 @@ def normalize(gray: np.ndarray, width: int = REF_WIDTH) -> np.ndarray:
 # ----------------------------------------------------------------------------
 @dataclass
 class Block:
-    kind: str                 # "soal" | "nomor"
+    kind: str                 # "soal" | "nomor" | "nama"
     rect: list[float]         # x, y, w, h (koordinat gambar template)
     rows: int
     cols: int
@@ -240,7 +250,7 @@ def fit_block(bubbles, rect, rows: int, cols: int, kind: str, items_along: str,
         ys = [y0 + (i + 0.5) * h / rows for i in range(rows)]
     if labels is None:
         n_ch = cols if items_along == "rows" else rows
-        labels = DIGITS[:n_ch] if kind == "nomor" else LETTERS[:n_ch]
+        labels = DIGITS[:n_ch] if kind == "nomor" else (ALPHABET[:n_ch] if kind == "nama" else LETTERS[:n_ch])
     centers = [[[xs[j], ys[i]] for j in range(cols)] for i in range(rows)]
     return Block(kind=kind, rect=[float(v) for v in rect], rows=rows, cols=cols, items_along=items_along,
                  start=start, labels=labels, centers=centers, radius=[rx, ry])
@@ -377,6 +387,7 @@ class SheetResult:
     label: str
     page: int = 0
     nomor: str = ""
+    nama_lembar: str = ""                         # nama dari bulatan huruf (bila ada blok nama)
     answers: dict = field(default_factory=dict)   # {nomor_soal: "A" | "" (kosong) | "*" (ganda)}
     flags: dict = field(default_factory=dict)     # {nomor_soal: alasan}
     nomor_flag: str = ""
@@ -420,7 +431,7 @@ def read_aligned(aligned: np.ndarray, tpl: Template, file: str = "", label: str 
     if (allv > 0.16).sum() < 3:
         th = 0.25
     res = SheetResult(file=file, label=label or Path(file).name, threshold=th)
-    digits = []
+    digits = []; letters = []
     for bi, b in enumerate(tpl.blocks):
         for it in range(b.n_items):
             vals = []
@@ -454,12 +465,18 @@ def read_aligned(aligned: np.ndarray, tpl: Template, file: str = "", label: str 
                 res.answers[q] = val
                 if flag:
                     res.flags[q] = flag
+            elif b.kind == "nama":
+                letters.append(val if val not in ("", "*") else " ")
             else:
                 digits.append(val if val not in ("", "*") else ("?" if val == "*" else "_"))
                 if flag and not res.nomor_flag:
                     res.nomor_flag = "nomor peserta " + flag
-    res.nomor = "".join(digits)
-    if digits and ("_" in res.nomor or "?" in res.nomor):
+    res.nama_lembar = " ".join("".join(letters).split())
+    res.nomor = "".join(digits).strip("_")  # kolom kosong di depan/belakang = nomor lebih pendek
+    if not res.nomor:
+        res.nomor = ""  # nomor tidak diisi sama sekali
+        res.nomor_flag = "" if (res.nama_lembar or not digits) else "nomor peserta tidak diisi"
+    elif "_" in res.nomor or "?" in res.nomor:  # kosong di tengah atau ganda
         res.nomor_flag = res.nomor_flag or "nomor peserta tidak terbaca lengkap"
     return res
 
@@ -474,6 +491,27 @@ def read_sheet(gray: np.ndarray, tpl: Template, file: str = "", label: str = "")
     if info.get("ecc") is not None and info["ecc"] < 0.55:
         res.flags[0] = "penyelarasan kurang yakin"
     return res, aligned
+
+
+def build_blank(images: list[np.ndarray], progress=None) -> np.ndarray:
+    """Buat gambar "LJK kosong" dari beberapa scan TERISI.
+
+    Semua scan diselaraskan ke scan pertama, lalu tiap piksel diambil nilai
+    terangnya (persentil 97). Isian pensil berbeda-beda antar siswa sehingga
+    hilang, sedangkan cetakan yang sama di semua lembar tetap ada.
+    """
+    if len(images) < 5:
+        raise ValueError("Butuh minimal 5 scan terisi untuk membuat LJK kosong.")
+    ref = normalize(images[0])
+    stack = [ref]
+    for i, im in enumerate(images[1:], 1):
+        try:
+            stack.append(align(im, ref)[0])
+        except AlignError:
+            pass
+        if progress:
+            progress(i, len(images) - 1)
+    return np.percentile(np.stack(stack), 97, axis=0).astype(np.uint8)
 
 
 # ----------------------------------------------------------------------------
@@ -516,7 +554,7 @@ def annotate(aligned: np.ndarray, res: SheetResult, key: dict[int, str]) -> np.n
     GREEN, RED, BLUE, ORANGE, PURPLE = (74, 163, 22), (38, 38, 220), (235, 99, 37), (6, 119, 217), (234, 51, 147)  # BGR
     for (x, y, rx, ry, kind, item, lab, fill) in res.marks:
         c = (int(round(x)), int(round(y))); ax = (int(rx * 1.35), int(ry * 1.35))
-        if kind == "nomor":
+        if kind in ("nomor", "nama"):
             if fill >= res.threshold:
                 cv2.ellipse(img, c, ax, 0, 0, 360, PURPLE, 3)
             continue

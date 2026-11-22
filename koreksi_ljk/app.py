@@ -150,7 +150,7 @@ class BlockDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("Atur blok")
         lay = QFormLayout(self)
-        self.kind = QComboBox(); self.kind.addItems(["Jawaban soal", "Nomor peserta"])
+        self.kind = QComboBox(); self.kind.addItems(["Jawaban soal", "Nomor peserta (angka)", "Nama peserta (huruf A–Z)"])
         self.rows = QSpinBox(); self.rows.setRange(1, 200); self.rows.setValue(max(rows, 1))
         self.cols = QSpinBox(); self.cols.setRange(1, 200); self.cols.setValue(max(cols, 1))
         self.orient = QComboBox()
@@ -185,8 +185,12 @@ class BlockDialog(QDialog):
         self._update()
 
     def _update(self):
-        nomor = self.kind.currentIndex() == 1
-        if nomor:
+        kind = self.kind.currentIndex()
+        nomor = kind >= 1
+        if kind == 2:
+            self.orient.setItemText(0, "Tiap BARIS = 1 huruf (A–Z ke samping)")
+            self.orient.setItemText(1, "Tiap KOLOM = 1 huruf (A–Z ke bawah)")
+        elif nomor:
             self.orient.setItemText(0, "Tiap BARIS = 1 digit (angka 0–9 ke samping)")
             self.orient.setItemText(1, "Tiap KOLOM = 1 digit (angka 0–9 ke bawah)")
         else:
@@ -196,15 +200,17 @@ class BlockDialog(QDialog):
         along_rows = self.orient.currentIndex() == 0
         n_ch = self.cols.value() if along_rows else self.rows.value()
         n_it = self.rows.value() if along_rows else self.cols.value()
-        self.labels.setText(omr.DIGITS[:n_ch] if nomor else omr.LETTERS[:n_ch])
-        if nomor:
+        self.labels.setText(omr.ALPHABET[:n_ch] if kind == 2 else (omr.DIGITS[:n_ch] if nomor else omr.LETTERS[:n_ch]))
+        if kind == 2:
+            self.info.setText(f"Nama sampai {n_it} huruf, tiap huruf {n_ch} pilihan.")
+        elif nomor:
             self.info.setText(f"{n_it} digit nomor peserta, tiap digit {n_ch} pilihan.")
         else:
             self.info.setText(f"Soal {self.start.value()}–{self.start.value() + n_it - 1}, "
                               f"masing-masing {n_ch} pilihan.")
 
     def values(self):
-        return dict(kind="nomor" if self.kind.currentIndex() == 1 else "soal",
+        return dict(kind=["soal", "nomor", "nama"][self.kind.currentIndex()],
                     rows=self.rows.value(), cols=self.cols.value(),
                     items_along="rows" if self.orient.currentIndex() == 0 else "cols",
                     start=self.start.value(), labels=self.labels.text().strip())
@@ -215,7 +221,7 @@ class BlockDialog(QDialog):
 # =============================================================================
 class TemplateTab(QWidget):
     templatesChanged = Signal()
-    COLORS = {"soal": QColor(T.PRIMARY), "nomor": QColor(T.PURPLE)}
+    COLORS = {"soal": QColor(T.PRIMARY), "nomor": QColor(T.PURPLE), "nama": QColor("#0891B2")}
 
     def __init__(self):
         super().__init__()
@@ -229,6 +235,10 @@ class TemplateTab(QWidget):
         self.list = QListWidget(); self.list.currentItemChanged.connect(self._open_selected)
         side.lay.addWidget(self.list, 1)
         side.lay.addWidget(button("＋  Template baru dari LJK kosong", "primary", slot=self.new_template))
+        side.lay.addWidget(button("Tidak punya LJK kosong? Pakai scan terisi…", slot=self.new_from_filled))
+        io = QHBoxLayout(); io.setSpacing(8)
+        io.addWidget(button("Impor…", slot=self.import_template)); io.addWidget(button("Ekspor…", slot=self.export_template))
+        side.lay.addLayout(io)
         side.lay.addWidget(button("Hapus template", "danger", slot=self.delete_template))
         help_ = label(
             "<b>Cara membuat template</b><ol style='margin:6px 0 0 -22px; line-height:150%'>"
@@ -332,6 +342,76 @@ class TemplateTab(QWidget):
         self._enable(True); self.redraw(fit=True); self._set_dirty(True)
         self.status.setText(f"{len(self.bubbles)} bulatan terdeteksi. Sekarang tarik kotak di sekeliling tiap kelompok bulatan.")
 
+    def _start_new(self, img, name):
+        self.tpl = omr.Template(name=name, ref_path="")
+        self.tpl.set_ref(img)
+        self.tpl_dir = None
+        self.bubbles = omr.detect_bubbles(self.tpl.ref())
+        self.name.blockSignals(True); self.name.setText(self.tpl.name); self.name.blockSignals(False)
+        self.list.blockSignals(True); self.list.clearSelection(); self.list.setCurrentItem(None); self.list.blockSignals(False)
+        self._enable(True); self.redraw(fit=True); self._set_dirty(True)
+        self.status.setText(f"{len(self.bubbles)} bulatan terdeteksi. Sekarang tarik kotak di sekeliling tiap kelompok bulatan.")
+
+    def new_from_filled(self):
+        if not self._confirm_discard():
+            return
+        d = QFileDialog.getExistingDirectory(self, "Pilih folder berisi scan LJK TERISI (min. 5 lembar)")
+        if not d:
+            return
+        files = omr.list_sheets(d)[:30]
+        if len(files) < 5:
+            QMessageBox.warning(self, APP_NAME, "Butuh minimal 5 scan di folder itu."); return
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            imgs = [omr.load_pages(f)[0][1] for f in files]
+            blank = omr.build_blank(imgs, progress=lambda i, n: (self.status.setText(f"Menyusun LJK kosong… {i}/{n}"),
+                                                                 QApplication.processEvents()))
+        except Exception as e:
+            QApplication.restoreOverrideCursor()
+            QMessageBox.warning(self, APP_NAME, f"Gagal: {e}"); return
+        QApplication.restoreOverrideCursor()
+        self._start_new(blank, Path(d).name)
+        self.status.setText(f"LJK kosong disusun dari {len(imgs)} scan (isian siswa dihapus otomatis). "
+                            f"{len(self.bubbles)} bulatan terdeteksi — tarik kotak di sekeliling tiap kelompok bulatan.")
+
+    def export_template(self):
+        if not self.tpl_dir:
+            QMessageBox.information(self, APP_NAME, "Pilih atau simpan template dulu."); return
+        fn, _ = QFileDialog.getSaveFileName(self, "Ekspor template", str(Path.home() / f"{safe_name(self.tpl.name)}.ljktemplate"),
+                                            "Template LJK (*.ljktemplate)")
+        if not fn:
+            return
+        import zipfile
+        with zipfile.ZipFile(fn, "w", zipfile.ZIP_DEFLATED) as z:
+            for f in ("template.json", "ref.png"):
+                z.write(self.tpl_dir / f, f)
+        QMessageBox.information(self, APP_NAME, f"Template diekspor:\n{fn}\n\nKirim berkas ini ke laptop lain lalu pilih “Impor…”.")
+
+    def import_template(self):
+        fn, _ = QFileDialog.getOpenFileName(self, "Impor template", "", "Template LJK (*.ljktemplate *.zip)")
+        if fn:
+            self.import_file(fn)
+
+    def import_file(self, fn) -> Path | None:
+        import zipfile
+        try:
+            with zipfile.ZipFile(fn) as z:
+                names = set(z.namelist())
+                if not {"template.json", "ref.png"} <= names:
+                    raise ValueError("bukan berkas template Koreksi LJK")
+                name = json.loads(z.read("template.json").decode("utf-8"))["name"]
+                d = templates_dir() / f"{safe_name(name)}_{int(time.time())}"
+                d.mkdir(parents=True)
+                for f in ("template.json", "ref.png"):
+                    (d / f).write_bytes(z.read(f))
+        except Exception as e:
+            QMessageBox.warning(self, APP_NAME, f"Gagal mengimpor: {e}"); return None
+        self.reload_list(select=str(d)); self.templatesChanged.emit()
+        it = self.list.currentItem()
+        if it:
+            self._open_selected(it, None)
+        return d
+
     def delete_template(self):
         it = self.list.currentItem()
         if not it:
@@ -393,6 +473,8 @@ class TemplateTab(QWidget):
                     sc.addEllipse(x - 2.5, y - 2.5, 5, 5, QPen(Qt.NoPen), dot)
             if b.kind == "soal":
                 txt = f"Soal {b.start}–{b.start + b.n_items - 1}  ({b.n_choices} pilihan: {b.labels})"
+            elif b.kind == "nama":
+                txt = f"Nama peserta  ({b.n_items} huruf)"
             else:
                 txt = f"Nomor peserta  ({b.n_items} digit)"
             t = sc.addSimpleText(txt.split("  ")[0]); t.setBrush(col)
@@ -401,8 +483,10 @@ class TemplateTab(QWidget):
             self.blocks.addItem(txt)
         qs = self.tpl.question_numbers()
         has_id = any(b.kind == "nomor" for b in self.tpl.blocks)
+        has_nm = any(b.kind == "nama" for b in self.tpl.blocks)
         self.status.setText(f"{len(qs)} soal" + (f" (nomor {min(qs)}–{max(qs)})" if qs else "") +
-                            (" · nomor peserta ✓" if has_id else " · belum ada blok nomor peserta (opsional)"))
+                            (" · nomor peserta ✓" if has_id else "") + (" · nama peserta ✓" if has_nm else "") +
+                            ("" if has_id or has_nm else " · belum ada blok nomor/nama peserta (opsional)"))
 
     def save(self):
         if not self.tpl:
@@ -770,6 +854,8 @@ class ResultStore(QWidget):
             m = self.grader.student_map()
             d["nama"] = m.get(d.get("nomor", ""), "") or next(
                 (v for k, v in m.items() if k.lstrip("0") == d.get("nomor", "").lstrip("0") and k.lstrip("0")), "")
+        if not d.get("nama") and d.get("nama_lembar"):
+            d["nama"] = d["nama_lembar"].title()
         d["checked"] = False
         self.results.append(d)
         i = len(self.results) - 1
@@ -793,7 +879,13 @@ class ResultStore(QWidget):
     def needs_review(self, r: dict) -> bool:
         if r.get("checked"):
             return False
-        return bool(r.get("error") or r.get("flags") or r.get("nomor_flag"))
+        return bool(r.get("error") or self.relevant_flags(r) or r.get("nomor_flag"))
+
+    def relevant_flags(self, r: dict) -> dict[int, str]:
+        """Tanda yang perlu dicek — soal di luar kunci (tidak dinilai) diabaikan."""
+        key = self.key()
+        fl = {int(k): v for k, v in r.get("flags", {}).items()}
+        return {q: v for q, v in fl.items() if q == 0 or not key or q in key}
 
     def save(self):
         if not self.folder:
@@ -859,7 +951,7 @@ class ResultsTab(QWidget):
         self.table.setFocusPolicy(Qt.NoFocus)
         hh = self.table.horizontalHeader(); hh.setHighlightSections(False)
         hh.setSectionResizeMode(QHeaderView.Fixed); hh.setSectionResizeMode(2, QHeaderView.Stretch)
-        for c, wdt in ((0, 112), (1, 96), (3, 70), (4, 66), (5, 76), (6, 66)):
+        for c, wdt in ((0, 108), (1, 74), (3, 62), (4, 58), (5, 70), (6, 70)):
             self.table.setColumnWidth(c, wdt)
         hh.setMinimumSectionSize(56)
         self.table.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
@@ -906,7 +998,7 @@ class ResultsTab(QWidget):
         for w in (self.f_nomor, self.f_nama, self.f_ans):
             w.editingFinished.connect(self.save_edit)
 
-        sp = QSplitter(); sp.addWidget(lc); sp.addWidget(rc); sp.setSizes([640, 600]); sp.setHandleWidth(20)
+        sp = QSplitter(); sp.addWidget(lc); sp.addWidget(rc); sp.setSizes([760, 560]); sp.setStretchFactor(0, 4); sp.setStretchFactor(1, 3); sp.setHandleWidth(20)
         sp.setStyleSheet("QSplitter::handle { background: transparent; }")
         lay = QVBoxLayout(self); lay.setContentsMargins(24, 20, 24, 24); lay.addWidget(sp)
         self.cur = None
@@ -997,7 +1089,7 @@ class ResultsTab(QWidget):
         parts = []; role = "warn"
         if r.get("error"):
             parts.append(f"<b>{r['error']}</b>"); role = "error"
-        fl = {int(k): v for k, v in r.get("flags", {}).items()}
+        fl = self.store.relevant_flags(r)
         if 0 in fl:
             parts.append(f"<b>{fl.pop(0)}</b>")
         if fl:

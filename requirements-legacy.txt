@@ -1,7 +1,8 @@
-# Build LEGACY: Windows 7 SP1 / 8 / 8.1 (64-bit) dan macOS 10.13–10.15 (Intel).
+# Build LEGACY: Windows 7 SP1 / 8 / 8.1 (32 & 64-bit) dan macOS 10.13–10.15 (Intel).
 # Python 3.8 adalah versi terakhir yang mendukung Windows 7. Qt 5.15 lewat PySide2.
 PySide2==5.15.2.1
-opencv-python-headless==4.6.0.66
+opencv-python-headless==4.6.0.66; sys_platform != "darwin"
+opencv-python-headless==4.5.1.48; sys_platform == "darwin"   # wheel terakhir untuk macOS 10.13
 numpy==1.24.4
 openpyxl==3.1.2
 pymupdf==1.21.1

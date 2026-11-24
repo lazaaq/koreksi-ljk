@@ -28,13 +28,14 @@ jobs:
           - { os: macos-15,       py: "3.12", req: requirements-dev.txt,        label: macOS-AppleSilicon }
           - { os: macos-15-intel, py: "3.12", req: requirements-dev.txt,        label: macOS-Intel }
           - { os: windows-latest, py: "3.8",  req: requirements-legacy-dev.txt, label: Windows-7-8-legacy }
+          - { os: windows-latest, py: "3.8",  req: requirements-legacy-dev.txt, label: Windows-32bit-legacy, arch: x86 }
           - { os: macos-15-intel, py: "3.8",  req: requirements-legacy-dev.txt, label: macOS-lama-legacy }
     name: test (${{ matrix.label }})
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
-        with: { python-version: "${{ matrix.py }}" }
+        with: { python-version: "${{ matrix.py }}", architecture: "${{ matrix.arch || 'x64' }}" }
       - name: Pustaka sistem untuk Qt (Linux)
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libegl1 libgl1 libxkbcommon0 libfontconfig1 libdbus-1-3 libglib2.0-0
@@ -57,11 +58,13 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { os: windows-latest, py: "3.12", req: requirements.txt,        pyi: "pyinstaller>=6.6",   mupdf: pymupdf, label: Windows-10-11 }
-          - { os: macos-15,       py: "3.12", req: requirements.txt,        pyi: "pyinstaller>=6.6",   mupdf: pymupdf, label: macOS-AppleSilicon }
-          - { os: macos-15-intel, py: "3.12", req: requirements.txt,        pyi: "pyinstaller>=6.6",   mupdf: pymupdf, label: macOS-Intel }
-          - { os: windows-latest, py: "3.8",  req: requirements-legacy.txt, pyi: "pyinstaller==5.13.2", mupdf: fitz,   label: Windows-7-8-8.1 }
-          - { os: macos-15-intel, py: "3.8",  req: requirements-legacy.txt, pyi: "pyinstaller==5.13.2", mupdf: fitz,   label: macOS-Intel-lama }
+          # macOS memakai Python resmi python.org (bukan Python bawaan runner) supaya versi macOS minimum tetap rendah
+          - { os: windows-latest, py: "3.12", req: requirements.txt,        pyi: "pyinstaller>=6.6",    mupdf: pymupdf, label: Windows-10-11 }
+          - { os: macos-15,       pyorg: "3.12.8/python-3.12.8-macos11.pkg", req: requirements.txt, pyi: "pyinstaller>=6.6", mupdf: pymupdf, label: macOS-AppleSilicon }
+          - { os: macos-15-intel, pyorg: "3.12.8/python-3.12.8-macos11.pkg", req: requirements.txt, pyi: "pyinstaller>=6.6", mupdf: pymupdf, label: macOS-Intel }
+          - { os: windows-latest, py: "3.8",  req: requirements-legacy.txt, pyi: "pyinstaller==5.13.2", mupdf: fitz,    label: Windows-7-8-8.1 }
+          - { os: windows-latest, py: "3.8",  req: requirements-legacy.txt, pyi: "pyinstaller==5.13.2", mupdf: fitz,    label: Windows-32bit, arch: x86 }
+          - { os: macos-15-intel, pyorg: "3.8.10/python-3.8.10-macosx10.9.pkg", req: requirements-legacy.txt, pyi: "pyinstaller==5.13.2", mupdf: fitz, label: macOS-Intel-lama }
     name: build (${{ matrix.label }})
     runs-on: ${{ matrix.os }}
     env:
@@ -69,11 +72,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
-        with: { python-version: "${{ matrix.py }}" }
-      - run: pip install -r ${{ matrix.req }} "${{ matrix.pyi }}"
+        if: matrix.py
+        with: { python-version: "${{ matrix.py }}", architecture: "${{ matrix.arch || 'x64' }}" }
+      - name: Python resmi python.org (macOS)
+        if: matrix.pyorg
+        run: |
+          curl -sSLo /tmp/python.pkg "https://www.python.org/ftp/python/${{ matrix.pyorg }}"
+          sudo installer -pkg /tmp/python.pkg -target /
+          V=$(echo "${{ matrix.pyorg }}" | cut -d/ -f1 | cut -d. -f1-2)
+          /Library/Frameworks/Python.framework/Versions/$V/bin/python3 -m venv "$RUNNER_TEMP/venv"
+          echo "$RUNNER_TEMP/venv/bin" >> "$GITHUB_PATH"
+      - run: python -m pip install --upgrade pip
+      - run: python -m pip install -r ${{ matrix.req }} "${{ matrix.pyi }}"
       - name: PyInstaller
         run: >
-          pyinstaller --noconfirm --clean --windowed --name "Koreksi LJK"
+          python -m PyInstaller --noconfirm --clean --windowed --name "Koreksi LJK"
           --collect-submodules ${{ matrix.mupdf }}
           --exclude-module onnxruntime --exclude-module PIL --exclude-module tkinter --exclude-module pytest
           --osx-bundle-identifier id.lanaaqil.koreksiljk

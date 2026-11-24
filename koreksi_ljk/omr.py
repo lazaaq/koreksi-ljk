@@ -39,32 +39,118 @@ def list_sheets(folder: str | Path) -> list[Path]:
     return files
 
 
-def load_pages(path: str | Path, dpi: int = 200) -> list[tuple[str, np.ndarray]]:
-    """Mengembalikan [(label, gambar_abu2)]. PDF multi-halaman → satu entri per halaman."""
-    path = Path(path)
-    if path.suffix.lower() in PDF_EXT:
+def _mupdf():
+    """PyMuPDF: nama modul `pymupdf` (≥1.24.3) atau `fitz` (versi lama, untuk build legacy)."""
+    try:
         import pymupdf
-        out = []
-        with pymupdf.open(str(path)) as doc:
-            for i, page in enumerate(doc):
-                pix = page.get_pixmap(dpi=dpi, colorspace=pymupdf.csGRAY)
-                img = np.frombuffer(pix.samples, np.uint8).reshape(pix.height, pix.width, pix.n)[:, :, 0].copy()
-                out.append((f"{path.name} hal. {i + 1}" if len(doc) > 1 else path.name, img))
-        return out
+    except ImportError:  # pragma: no cover - tergantung versi terpasang
+        import fitz as pymupdf
+    return pymupdf
+
+
+def _pix_to_gray(pix, mu) -> np.ndarray:
+    if pix.alpha:
+        pix = mu.Pixmap(pix, 0)  # buang kanal alfa
+    if pix.n != 1:
+        pix = mu.Pixmap(mu.csGRAY, pix)
+    arr = np.frombuffer(pix.samples, np.uint8).reshape(pix.height, pix.stride)[:, :pix.width]
+    return arr.copy()
+
+
+def _read_bytes(path: Path) -> np.ndarray:
     data = np.fromfile(str(path), dtype=np.uint8)  # aman untuk nama berkas non-ASCII di Windows
-    img = cv2.imdecode(data, cv2.IMREAD_GRAYSCALE)
+    if data.size == 0:
+        raise ValueError("Berkas kosong (0 byte)")
+    return data
+
+
+def _to_gray8(img: np.ndarray) -> np.ndarray:
+    if img.dtype != np.uint8:  # mis. TIFF 16-bit
+        img = cv2.normalize(img, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
+    if img.ndim == 3:
+        img = cv2.cvtColor(img, cv2.COLOR_BGRA2GRAY if img.shape[2] == 4 else cv2.COLOR_BGR2GRAY)
+    return img
+
+
+def page_count(path: str | Path) -> int:
+    """Jumlah halaman/lembar dalam berkas (PDF & TIFF bisa lebih dari satu)."""
+    path = Path(path)
+    ext = path.suffix.lower()
+    if ext in PDF_EXT:
+        mu = _mupdf()
+        with mu.open(str(path)) as doc:
+            return len(doc)
+    if ext in (".tif", ".tiff"):
+        if hasattr(cv2, "imdecodemulti"):
+            try:
+                ok, imgs = cv2.imdecodemulti(_read_bytes(path), cv2.IMREAD_GRAYSCALE)
+                if ok and imgs:
+                    return len(imgs)
+            except cv2.error:
+                pass
+        else:  # OpenCV lama (build legacy): MuPDF bisa membuka TIFF multi-halaman
+            try:
+                mu = _mupdf()
+                with mu.open(str(path)) as doc:
+                    return max(1, len(doc))
+            except Exception:
+                pass
+    return 1
+
+
+def _tiff_page_mupdf(path: Path, index: int) -> np.ndarray:
+    mu = _mupdf()
+    with mu.open(str(path)) as doc:
+        page = doc[index]
+        imgs = page.get_images(full=True)
+        native_w = imgs[0][2] if imgs else 0
+        z = native_w / page.rect.width if native_w and page.rect.width else 200 / 72
+        return _pix_to_gray(page.get_pixmap(matrix=mu.Matrix(z, z), colorspace=mu.csGRAY, alpha=False), mu)
+
+
+def load_page(path: str | Path, index: int = 0, dpi: int = 200) -> tuple[str, np.ndarray]:
+    """Baca satu halaman sebagai gambar abu-abu 8-bit. Hasil: (label, gambar)."""
+    path = Path(path)
+    ext = path.suffix.lower()
+    n = page_count(path) if ext in PDF_EXT | {".tif", ".tiff"} else 1
+    label = f"{path.name} hal. {index + 1}" if n > 1 else path.name
+    if ext in PDF_EXT:
+        mu = _mupdf()
+        with mu.open(str(path)) as doc:
+            if doc.needs_pass:
+                raise ValueError("PDF terkunci kata sandi")
+            pix = doc[index].get_pixmap(dpi=dpi, colorspace=mu.csGRAY, alpha=False)
+            return label, _pix_to_gray(pix, mu)
+    data = _read_bytes(path)
+    img = None
+    if ext in (".tif", ".tiff") and n > 1:
+        if hasattr(cv2, "imdecodemulti"):
+            ok, imgs = cv2.imdecodemulti(data, cv2.IMREAD_UNCHANGED)
+            img = imgs[index] if ok else None
+        else:
+            img = _tiff_page_mupdf(path, index)
+    else:
+        try:
+            img = cv2.imdecode(data, cv2.IMREAD_UNCHANGED)
+        except cv2.error:
+            img = None
     if img is None:  # mis. GIF pada OpenCV lama → pakai MuPDF
         try:
-            import pymupdf
-            pix = pymupdf.Pixmap(str(path))
-            if pix.n != 1:
-                pix = pymupdf.Pixmap(pymupdf.csGRAY, pix)
-            img = np.frombuffer(pix.samples, np.uint8).reshape(pix.height, pix.width, pix.n)[:, :, 0].copy()
+            mu = _mupdf()
+            img = _pix_to_gray(mu.Pixmap(str(path)), mu)
         except Exception:
             img = None
     if img is None:
-        raise ValueError("Berkas gambar tidak bisa dibuka")
-    return [(path.name, img)]
+        raise ValueError("Berkas gambar tidak bisa dibuka atau rusak")
+    img = _to_gray8(img)
+    if min(img.shape[:2]) < 200:
+        raise ValueError(f"Gambar terlalu kecil ({img.shape[1]}×{img.shape[0]} px) — scan minimal 150 dpi")
+    return label, img
+
+
+def load_pages(path: str | Path, dpi: int = 200) -> list[tuple[str, np.ndarray]]:
+    """Mengembalikan [(label, gambar_abu2)] untuk semua halaman berkas."""
+    return [load_page(path, i, dpi) for i in range(page_count(path))]
 
 
 def normalize(gray: np.ndarray, width: int = REF_WIDTH) -> np.ndarray:
@@ -131,13 +217,19 @@ class Template:
     def load(cls, folder: str | Path) -> "Template":
         folder = Path(folder)
         data = json.loads((folder / "template.json").read_text(encoding="utf-8"))
-        t = cls(name=data["name"], ref_path=str(folder / "ref.png"))
-        t.blocks = [Block(**b) for b in data["blocks"]]
+        if not (folder / "ref.png").exists():
+            raise FileNotFoundError("gambar template (ref.png) hilang")
+        t = cls(name=str(data.get("name") or folder.name), ref_path=str(folder / "ref.png"))
+        known = set(Block.__dataclass_fields__)
+        t.blocks = [Block(**{k: v for k, v in b.items() if k in known}) for b in data.get("blocks", [])]
         return t
 
     def ref(self) -> np.ndarray:
         if self._ref is None:
-            self._ref = normalize(cv2.imdecode(np.fromfile(self.ref_path, np.uint8), cv2.IMREAD_GRAYSCALE))
+            img = cv2.imdecode(np.fromfile(self.ref_path, np.uint8), cv2.IMREAD_GRAYSCALE)
+            if img is None:
+                raise ValueError("gambar template tidak bisa dibuka")
+            self._ref = normalize(img)
         return self._ref
 
     def set_ref(self, gray: np.ndarray):
@@ -488,11 +580,14 @@ def read_aligned(aligned: np.ndarray, tpl: Template, file: str = "", label: str 
 
 
 def read_sheet(gray: np.ndarray, tpl: Template, file: str = "", label: str = "") -> tuple[SheetResult, np.ndarray | None]:
+    lab = label or Path(file).name
     try:
         aligned, info = align(gray, tpl.ref())
+        res = read_aligned(aligned, tpl, file, label)
     except AlignError as e:
-        return SheetResult(file=file, label=label or Path(file).name, error=str(e)), None
-    res = read_aligned(aligned, tpl, file, label)
+        return SheetResult(file=file, label=lab, error=str(e)), None
+    except Exception as e:  # jangan sampai satu lembar aneh menghentikan seluruh folder
+        return SheetResult(file=file, label=lab, error=f"Gagal dibaca: {e}"), None
     res.align_info = info
     if info.get("ecc") is not None and info["ecc"] < 0.55:
         res.flags[0] = "penyelarasan kurang yakin"
@@ -526,13 +621,23 @@ def build_blank(images: list[np.ndarray], progress=None) -> np.ndarray:
 def parse_key(text: str, questions: list[int] | None = None) -> dict[int, str]:
     """Terima "ABCDE..." atau "1. A  2) B ..." atau satu per baris."""
     import re
-    t = text.upper()
-    pairs = re.findall(r"(\d+)\s*[.):\-=]?\s*([A-J])\b", t)
-    if pairs and len(pairs) >= len(re.findall(r"[A-J]", re.sub(r"\d+\s*[.):\-=]?\s*[A-J]\b", "", t))):
-        return {int(n): a for n, a in pairs}
-    letters = re.findall(r"[A-J]", re.sub(r"\d+", " ", t))
+    t = (text or "").upper()
+    pair_re = r"(\d+)\s*[.):\-=]?\s*([A-J])(?![A-Z])"
+    pairs = re.findall(pair_re, t)
+    rest = re.sub(pair_re, " ", t)
+    # huruf lepas hanya dari "kata" yang seluruhnya A–J (mis. "ABCDE"), supaya
+    # judul seperti "Kunci jawaban" tidak ikut terbaca sebagai kunci
+    bare = "".join(tok for tok in re.findall(r"[A-Z]+", re.sub(r"\d+", " ", rest)) if set(tok) <= set(LETTERS))
+    if pairs and (len(pairs) >= 3 or not bare):
+        return {int(n): a for n, a in pairs if int(n) > 0}
+    letters = "".join(tok for tok in re.findall(r"[A-Z]+", re.sub(r"\d+", " ", t)) if set(tok) <= set(LETTERS))
     qs = questions or list(range(1, len(letters) + 1))
     return {q: a for q, a in zip(qs, letters)}
+
+
+def invalid_key(key: dict[int, str], tpl: "Template") -> list[int]:
+    """Nomor soal yang kuncinya bukan pilihan yang ada di LJK (mis. "E" pada LJK A–D)."""
+    return sorted(q for q, a in key.items() if a not in tpl.labels_for(q))
 
 
 def grade(answers: dict[int, str], key: dict[int, str], pts=(1.0, 0.0, 0.0)) -> dict:

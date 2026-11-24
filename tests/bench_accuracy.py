@@ -1,4 +1,4 @@
-"""Uji akurasi pembacaan pada scan sintetis. Jalankan: python tests/test_accuracy.py"""
+"""Uji akurasi pembacaan pada scan sintetis. Jalankan: python tests/bench_accuracy.py"""
 import json, sys, time
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))

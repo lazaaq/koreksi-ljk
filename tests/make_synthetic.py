@@ -15,7 +15,9 @@ OUT = Path(sys.argv[1] if len(sys.argv) > 1 else "tests/data")
 
 
 def font(sz):
-    for f in ["/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf"]:
+    for f in ["/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+              "C:/Windows/Fonts/arial.ttf", "/System/Library/Fonts/Supplemental/Arial.ttf", "/Library/Fonts/Arial.ttf",
+              "/System/Library/Fonts/Helvetica.ttc"]:
         try:
             return ImageFont.truetype(f, sz)
         except OSError:

@@ -3,8 +3,7 @@ from __future__ import annotations
 
 import sys
 
-from PySide6.QtGui import QColor, QFont, QPalette
-from PySide6.QtWidgets import QApplication, QFrame, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
+from .qt import QColor, QFont, QPalette, QApplication, QFrame, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
 # Warna (selaras dengan skala Tailwind agar konsisten & kontras memenuhi WCAG AA)
 WHITE = "#FFFFFF"
@@ -91,8 +90,8 @@ QTabWidget::pane {{ border: none; border-top: 1px solid {BORDER}; background: {W
 QTabWidget::tab-bar {{ left: 24px; }}
 QTabBar {{ background: {WHITE}; }}
 QTabBar::tab {{
-    background: transparent; color: {MUTED}; font-size: 15px; font-weight: 600;
-    padding: 12px 18px; margin-right: 8px; border: none; border-bottom: 3px solid transparent;
+    background: transparent; color: {MUTED};
+    padding: 12px 18px; min-width: 70px; margin-right: 8px; border: none; border-bottom: 3px solid transparent;
 }}
 QTabBar::tab:selected {{ color: {PRIMARY}; border-bottom: 3px solid {PRIMARY}; }}
 QTabBar::tab:hover:!selected {{ color: {TEXT}; }}
@@ -184,7 +183,7 @@ def button(text: str, kind: str | None = None, size: str | None = None, slot=Non
         b.setProperty("kind", kind)
     if size:
         b.setProperty("size", size)
-    from PySide6.QtCore import Qt
+    from .qt import Qt
     b.setCursor(Qt.PointingHandCursor)
     if slot:
         b.clicked.connect(slot)
@@ -205,7 +204,7 @@ class Card(QFrame):
             if step is not None:
                 n = QLabel(str(step))
                 n.setFixedSize(26, 26)
-                from PySide6.QtCore import Qt
+                from .qt import Qt
                 n.setAlignment(Qt.AlignCenter)
                 n.setStyleSheet(f"background:{PRIMARY_SOFT};color:{PRIMARY};border-radius:13px;font-weight:700;font-size:13px;")
                 head.addWidget(n)
@@ -224,8 +223,8 @@ def page_header(title: str, subtitle: str) -> QWidget:
 
 def clickable(root: QWidget):
     """Kursor tangan untuk semua elemen yang bisa diklik di bawah root."""
-    from PySide6.QtCore import Qt
-    from PySide6.QtWidgets import (QAbstractButton, QComboBox, QListWidget, QTabBar, QTableWidget, QHeaderView,
+    from .qt import Qt
+    from .qt import (QAbstractButton, QComboBox, QListWidget, QTabBar, QTableWidget, QHeaderView,
                                    QTabWidget)
     for w in [root] + root.findChildren(QWidget):
         if isinstance(w, (QAbstractButton, QComboBox, QTabBar)):
@@ -236,3 +235,13 @@ def clickable(root: QWidget):
             w.viewport().setCursor(Qt.PointingHandCursor)
         elif isinstance(w, QHeaderView) and w.sectionsClickable():
             w.setCursor(Qt.PointingHandCursor)
+
+
+def style_tabs(tabs):
+    """Font tab diatur lewat QFont (bukan QSS) agar lebar tab dihitung benar di Qt 5 maupun Qt 6."""
+    from .qt import Qt
+    bar = tabs.tabBar()
+    f = QFont(bar.font()); f.setPixelSize(15); f.setBold(True)
+    bar.setFont(f)
+    bar.setElideMode(Qt.ElideNone)
+    bar.setExpanding(False)

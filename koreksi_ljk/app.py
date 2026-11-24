@@ -1,4 +1,4 @@
-"""Tampilan aplikasi Koreksi LJK (PySide6) — Windows & macOS."""
+"""Tampilan aplikasi Koreksi LJK (Qt 6 / Qt 5) — Windows & macOS."""
 from __future__ import annotations
 
 import json
@@ -10,15 +10,13 @@ from pathlib import Path
 
 import cv2
 import numpy as np
-from PySide6.QtCore import Qt, QRectF, QPointF, QThread, Signal, QSettings, QStandardPaths
-from PySide6.QtGui import QImage, QPixmap, QPen, QColor, QBrush, QPainter, QAction, QFont
-from PySide6.QtWidgets import (
-    QApplication, QMainWindow, QTabWidget, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QFormLayout,
+from .qt import (
+    Qt, QRectF, QPointF, QThread, Signal, QSettings, QStandardPaths, QImage, QPixmap, QPen, QColor, QBrush, QPainter,
+    QFont, QApplication, QMainWindow, QTabWidget, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QFormLayout,
     QPushButton, QLabel, QListWidget, QListWidgetItem, QLineEdit, QPlainTextEdit, QComboBox, QSpinBox,
-    QDoubleSpinBox, QFileDialog, QMessageBox, QGraphicsView, QGraphicsScene, QGraphicsRectItem,
-    QGraphicsEllipseItem, QGraphicsPixmapItem, QGraphicsSimpleTextItem, QDialog, QDialogButtonBox,
-    QProgressBar, QTableWidget, QTableWidgetItem, QHeaderView, QCheckBox, QSplitter, QGroupBox,
-    QAbstractItemView, QSizePolicy, QScrollArea, QFrame,
+    QDoubleSpinBox, QFileDialog, QMessageBox, QGraphicsView, QGraphicsScene, QGraphicsRectItem, QGraphicsPixmapItem,
+    QDialog, QDialogButtonBox, QProgressBar, QTableWidget, QTableWidgetItem, QHeaderView, QCheckBox, QSplitter,
+    QAbstractItemView, QScrollArea, QFrame, exec_, event_pos, set_form_row_visible, prepare_app_attributes, QT_API,
 )
 
 from . import omr
@@ -29,6 +27,7 @@ from . import __version__
 
 APP_NAME = "Koreksi LJK"
 RESULT_FILE = "hasil_koreksi_ljk.json"
+IMAGE_FILTER = ("Gambar/PDF (" + " ".join(f"*{e} *{e.upper()}" for e in sorted(omr.IMAGE_EXT | omr.PDF_EXT)) + ")")
 
 
 def data_dir() -> Path:
@@ -52,6 +51,21 @@ def to_pixmap(img: np.ndarray) -> QPixmap:
         h, w, _ = rgb.shape
         q = QImage(rgb.data, w, h, 3 * w, QImage.Format_RGB888)
     return QPixmap.fromImage(q.copy())
+
+
+def new_template_dir(name: str) -> Path:
+    """Folder baru yang belum dipakai untuk menyimpan template."""
+    base = templates_dir() / f"{safe_name(name)[:60]}_{int(time.time())}"
+    d, n = base, 1
+    while d.exists():
+        n += 1
+        d = base.with_name(f"{base.name}-{n}")
+    return d
+
+
+def basename(path: str) -> str:
+    """Nama berkas dari path Windows maupun macOS (hasil bisa dibuka lintas OS)."""
+    return str(path).replace("\\", "/").rstrip("/").split("/")[-1]
 
 
 def safe_name(s: str) -> str:
@@ -108,9 +122,9 @@ class ImageView(QGraphicsView):
 
     def mousePressEvent(self, e):
         if e.button() == Qt.RightButton or (e.button() == Qt.LeftButton and not self.draw_enabled):
-            self._pan = e.position(); self.setCursor(Qt.ClosedHandCursor); return
+            self._pan = event_pos(e); self.setCursor(Qt.ClosedHandCursor); return
         if e.button() == Qt.LeftButton and self.draw_enabled and self.pix_item:
-            self._origin = self.mapToScene(e.position().toPoint())
+            self._origin = self.mapToScene(event_pos(e).toPoint())
             self._band = QGraphicsRectItem()
             self._band.setPen(QPen(QColor("#e8590c"), 2, Qt.DashLine)); self._band.pen().setCosmetic(True)
             pen = QPen(QColor("#e8590c"), 2, Qt.DashLine); pen.setCosmetic(True); self._band.setPen(pen)
@@ -121,12 +135,12 @@ class ImageView(QGraphicsView):
 
     def mouseMoveEvent(self, e):
         if self._pan is not None:
-            d = e.position() - self._pan; self._pan = e.position()
+            d = event_pos(e) - self._pan; self._pan = event_pos(e)
             self.horizontalScrollBar().setValue(self.horizontalScrollBar().value() - int(d.x()))
             self.verticalScrollBar().setValue(self.verticalScrollBar().value() - int(d.y()))
             return
         if self._origin is not None and self._band is not None:
-            p = self.mapToScene(e.position().toPoint())
+            p = self.mapToScene(event_pos(e).toPoint())
             self._band.setRect(QRectF(self._origin, p).normalized())
             return
         super().mouseMoveEvent(e)
@@ -199,7 +213,7 @@ class BlockDialog(QDialog):
         isian = kind == 3
         form = self.layout()
         for w in (self.title, self.charset):
-            form.setRowVisible(w, isian)
+            set_form_row_visible(form, w, isian)
         huruf = (kind == 2) or (isian and self.charset.currentIndex() == 1)
         if huruf:
             self.orient.setItemText(0, "Tiap BARIS = 1 huruf (A–Z ke samping)")
@@ -337,12 +351,11 @@ class TemplateTab(QWidget):
     def new_template(self):
         if not self._confirm_discard():
             return
-        fn, _ = QFileDialog.getOpenFileName(self, "Pilih scan LJK KOSONG", "",
-                                            "Gambar/PDF (*.jpg *.jpeg *.png *.tif *.tiff *.bmp *.pdf)")
+        fn, _ = QFileDialog.getOpenFileName(self, "Pilih scan LJK KOSONG", "", IMAGE_FILTER)
         if not fn:
             return
         try:
-            img = omr.load_pages(fn)[0][1]
+            img = omr.load_page(fn, 0)[1]
         except Exception as e:
             QMessageBox.warning(self, APP_NAME, f"Gagal membuka berkas: {e}"); return
         self.tpl = omr.Template(name=Path(fn).stem, ref_path="")
@@ -375,7 +388,12 @@ class TemplateTab(QWidget):
             QMessageBox.warning(self, APP_NAME, "Butuh minimal 5 scan di folder itu."); return
         QApplication.setOverrideCursor(Qt.WaitCursor)
         try:
-            imgs = [omr.load_pages(f)[0][1] for f in files]
+            imgs = []
+            for f in files:
+                try:
+                    imgs.append(omr.load_page(f, 0)[1])
+                except Exception:
+                    pass  # lewati berkas yang rusak
             blank = omr.build_blank(imgs, progress=lambda i, n: (self.status.setText(f"Menyusun LJK kosong… {i}/{n}"),
                                                                  QApplication.processEvents()))
         except Exception as e:
@@ -386,8 +404,8 @@ class TemplateTab(QWidget):
         self.status.setText(f"Disusun dari {len(imgs)} scan · {len(self.bubbles)} bulatan · tarik kotak untuk menandai")
 
     def export_template(self):
-        if not self.tpl_dir:
-            QMessageBox.information(self, APP_NAME, "Pilih atau simpan template dulu."); return
+        if not self.tpl_dir or self.dirty:
+            QMessageBox.information(self, APP_NAME, "Simpan template dulu sebelum diekspor."); return
         fn, _ = QFileDialog.getSaveFileName(self, "Ekspor template", str(Path.home() / f"{safe_name(self.tpl.name)}.ljktemplate"),
                                             "Template LJK (*.ljktemplate)")
         if not fn:
@@ -411,7 +429,7 @@ class TemplateTab(QWidget):
                 if not {"template.json", "ref.png"} <= names:
                     raise ValueError("bukan berkas template Koreksi LJK")
                 name = json.loads(z.read("template.json").decode("utf-8"))["name"]
-                d = templates_dir() / f"{safe_name(name)}_{int(time.time())}"
+                d = new_template_dir(name)
                 d.mkdir(parents=True)
                 for f in ("template.json", "ref.png"):
                     (d / f).write_bytes(z.read(f))
@@ -444,7 +462,7 @@ class TemplateTab(QWidget):
         if not rows:
             dlg.info.setText("Tidak ada bulatan terdeteksi di kotak ini — isi jumlah baris/kolom secara manual; "
                              "posisi akan dibagi rata di dalam kotak.")
-        if dlg.exec() != QDialog.Accepted:
+        if exec_(dlg) != QDialog.Accepted:
             return
         v = dlg.values()
         if v["kind"] == "isian" and not v["title"]:
@@ -520,11 +538,12 @@ class TemplateTab(QWidget):
             QMessageBox.warning(self, APP_NAME, "Tambahkan minimal satu blok jawaban soal."); return
         name = self.name.text().strip() or "Template"
         self.tpl.name = name
-        d = self.tpl_dir or (templates_dir() / f"{safe_name(name)}_{int(time.time())}")
+        d = self.tpl_dir or new_template_dir(name)
         self.tpl.save(d)
         self.tpl_dir = d; self._set_dirty(False)
         self.reload_list(select=str(d)); self.templatesChanged.emit()
-        self.status.setText("Tersimpan ✓")
+        self.redraw()
+        self.status.setText("Tersimpan ✓  ·  " + self.status.text())
 
 
 # =============================================================================
@@ -535,48 +554,61 @@ class GradeWorker(QThread):
     result = Signal(dict, bytes)
     done = Signal()
 
-    def __init__(self, files, tpl: omr.Template, threads=4):
+    def __init__(self, files, tpl: omr.Template, threads=None):
         super().__init__()
-        self.files = files; self.tpl = tpl; self.threads = threads; self._stop = False
+        import os
+        self.files = files; self.tpl = tpl; self._stop = False
+        self.threads = threads or max(1, min(4, (os.cpu_count() or 2) - 1))
 
     def stop(self):
         self._stop = True
 
     def run(self):
         tpl = self.tpl
-        tpl.ref(); tpl.baseline()  # hitung sekali sebelum paralel
+        try:
+            tpl.ref(); tpl.baseline()  # hitung sekali sebelum paralel
+        except Exception as e:
+            r = omr.SheetResult(file="", label="(template)", error=f"Template tidak bisa dibuka: {e}")
+            self.result.emit(r.to_json(), b""); self.done.emit(); return
+        # daftar halaman saja — gambar baru dimuat saat diproses (hemat memori untuk ratusan lembar)
         jobs = []
         for f in self.files:
             try:
-                for i, (label, img) in enumerate(omr.load_pages(f)):
-                    jobs.append((str(f), i, label, img))
+                jobs += [(str(f), i) for i in range(omr.page_count(f))]
             except Exception as e:
                 r = omr.SheetResult(file=str(f), label=Path(f).name, error=f"Berkas tidak bisa dibuka: {e}")
                 self.result.emit(r.to_json(), b"")
         total = len(jobs)
 
         def work(job):
-            f, i, label, img = job
+            f, i = job
             if self._stop:
                 return None
+            try:
+                label, img = omr.load_page(f, i)
+            except Exception as e:
+                return omr.SheetResult(file=f, label=Path(f).name, page=i, error=f"Berkas tidak bisa dibuka: {e}"), b"", []
             res, aligned = omr.read_sheet(img, tpl, f, label)
             res.page = i
             thumb = b""
             if aligned is not None:
-                thumb = cv2.imencode(".jpg", aligned, [cv2.IMWRITE_JPEG_QUALITY, 90])[1].tobytes()
+                ok, enc = cv2.imencode(".jpg", aligned, [cv2.IMWRITE_JPEG_QUALITY, 90])
+                thumb = enc.tobytes() if ok else b""
             return res, thumb, res.marks
 
         n = 0
-        with ThreadPoolExecutor(max_workers=self.threads) as ex:
-            for out in ex.map(work, jobs):
-                n += 1
-                if out is None:
-                    continue
-                res, thumb, marks = out
-                d = res.to_json(); d["_marks"] = marks
-                self.result.emit(d, thumb)
-                self.progress.emit(n, total, res.label)
-        self.done.emit()
+        try:
+            with ThreadPoolExecutor(max_workers=self.threads) as ex:
+                for out in ex.map(work, jobs):
+                    n += 1
+                    if out is None:
+                        continue
+                    res, thumb, marks = out
+                    d = res.to_json(); d["_marks"] = marks
+                    self.result.emit(d, thumb)
+                    self.progress.emit(n, total, res.label)
+        finally:
+            self.done.emit()
 
 
 # =============================================================================
@@ -591,6 +623,7 @@ class GradeTab(QWidget):
         self.store = store
         self.settings = QSettings()
         self.worker = None
+        self._tpl_cache = {}
 
         mono = QFont("Menlo" if sys.platform == "darwin" else "Consolas"); mono.setStyleHint(QFont.Monospace)
         mono.setPixelSize(15)
@@ -680,13 +713,23 @@ class GradeTab(QWidget):
         self._tpl_changed()
 
     def template(self) -> omr.Template | None:
+        """Template terpilih (di-cache; dimuat ulang hanya bila berkasnya berubah)."""
         d = self.tpl_combo.currentData()
         if not d:
             return None
         try:
-            return omr.Template.load(d)
+            stamp = (Path(d) / "template.json").stat().st_mtime
+        except OSError:
+            return None
+        hit = self._tpl_cache.get(d)
+        if hit and hit[0] == stamp:
+            return hit[1]
+        try:
+            t = omr.Template.load(d)
         except Exception:
             return None
+        self._tpl_cache[d] = (stamp, t)
+        return t
 
     def _tpl_changed(self):
         self._key_changed()
@@ -706,7 +749,12 @@ class GradeTab(QWidget):
             return
         qs = tpl.question_numbers(); k = self.key_dict()
         miss = [q for q in qs if q not in k]
-        if not k:
+        bad = omr.invalid_key(k, tpl)
+        if bad:
+            self.key_info.setText(f"Kunci no. {', '.join(map(str, bad[:8]))}{'…' if len(bad) > 8 else ''} "
+                                  f"tidak ada di pilihan LJK ({tpl.labels_for(bad[0])})")
+            set_role(self.key_info, "error")
+        elif not k:
             self.key_info.setText(f"{len(qs)} soal"); set_role(self.key_info, "hint")
         elif miss:
             self.key_info.setText(f"{len(k)} dari {len(qs)} soal dinilai")
@@ -718,13 +766,14 @@ class GradeTab(QWidget):
         tpl = self.template()
         if not tpl:
             return
-        fn, _ = QFileDialog.getOpenFileName(self, "Pilih scan LJK berisi KUNCI", "",
-                                            "Gambar/PDF (*.jpg *.jpeg *.png *.tif *.tiff *.bmp *.pdf)")
+        fn, _ = QFileDialog.getOpenFileName(self, "Pilih scan LJK berisi KUNCI", "", IMAGE_FILTER)
         if not fn:
             return
         QApplication.setOverrideCursor(Qt.WaitCursor)
         try:
-            res, _ = omr.read_sheet(omr.load_pages(fn)[0][1], tpl, fn)
+            res, _ = omr.read_sheet(omr.load_page(fn, 0)[1], tpl, fn)
+        except Exception as e:
+            res = omr.SheetResult(file=fn, label=Path(fn).name, error=f"Gagal membuka berkas: {e}")
         finally:
             QApplication.restoreOverrideCursor()
         if res.error:
@@ -804,14 +853,15 @@ class GradeTab(QWidget):
             b_new = box.addButton("Lanjutkan (hanya berkas baru)", QMessageBox.AcceptRole)
             b_all = box.addButton("Koreksi ulang semua", QMessageBox.DestructiveRole)
             box.addButton("Batal", QMessageBox.RejectRole)
-            box.exec()
+            exec_(box)
             if box.clickedButton() not in (b_new, b_all):
                 return
             only_new = box.clickedButton() is b_new
         self.store.begin(folder, tpl, self, keep_previous=only_new)
         if only_new:
-            done = {r["file"] for r in self.store.results}
-            files = [f for f in files if str(f) not in done]
+            # bandingkan nama berkas saja: huruf drive flashdisk bisa berubah (E: → F:)
+            done = {basename(r["file"]) for r in self.store.results}
+            files = [f for f in files if f.name not in done]
             if not files:
                 self.log.setText("Tidak ada berkas baru."); self.finished_.emit(); return
         self.worker = GradeWorker(files, tpl)
@@ -918,6 +968,12 @@ class ResultStore(QWidget):
         except OSError:
             pass
 
+    def locate(self, file: str) -> str:
+        """Lokasi berkas scan; bila folder dipindah (mis. flashdisk beda huruf drive), cari di folder hasil."""
+        if not Path(file).exists() and self.folder and (self.folder / basename(file)).exists():
+            return str(self.folder / basename(file))
+        return file
+
     def aligned(self, i: int):
         """(gambar_terselaraskan, SheetResult) — dari cache atau dibaca ulang."""
         r = self.results[i]
@@ -928,8 +984,8 @@ class ResultStore(QWidget):
             img = cv2.imdecode(np.frombuffer(png, np.uint8), cv2.IMREAD_GRAYSCALE)
         else:
             try:
-                pages = omr.load_pages(r["file"])
-                res, img = omr.read_sheet(pages[r.get("page", 0)][1], self.tpl, r["file"])
+                _, page = omr.load_page(self.locate(r["file"]), r.get("page", 0))
+                res, img = omr.read_sheet(page, self.tpl, r["file"])
             except Exception:
                 return None, None
             if img is None:
@@ -972,7 +1028,7 @@ class ResultsTab(QWidget):
         self.table.setFocusPolicy(Qt.NoFocus)
         hh = self.table.horizontalHeader(); hh.setHighlightSections(False)
         hh.setSectionResizeMode(QHeaderView.Fixed); hh.setSectionResizeMode(2, QHeaderView.Stretch)
-        for c, wdt in ((0, 108), (1, 74), (3, 62), (4, 58), (5, 70), (6, 70)):
+        for c, wdt in ((0, 108), (1, 88), (3, 62), (4, 58), (5, 70), (6, 70)):
             self.table.setColumnWidth(c, wdt)
         hh.setMinimumSectionSize(56)
         self.table.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
@@ -1138,9 +1194,11 @@ class ResultsTab(QWidget):
         s = self.f_ans.text().upper().replace(" ", "")
         qs = [q for q in self.qs() if q > 0]
         ans = {}
+        labels_for = self.store.tpl.labels_for if self.store.tpl else (lambda q: omr.LETTERS)
         for j, q in enumerate(qs):
             c = s[j] if j < len(s) else "-"
-            ans[str(q)] = "" if c in "-_?" else c
+            # hanya huruf pilihan yang ada di LJK (mis. A–D) atau "*" (ganda); selain itu = kosong
+            ans[str(q)] = c if (c == "*" or c in labels_for(q)) else ""
         changed = ans != r.get("answers")
         r["answers"] = ans
         if changed:
@@ -1178,7 +1236,12 @@ class ResultsTab(QWidget):
         i = g.tpl_combo.findText(name)
         if i >= 0:
             g.tpl_combo.setCurrentIndex(i)
-        self.store.folder = Path(fn).parent; self.store.tpl = g.template(); self.store.cache = {}
+            tpl = g.template()
+        else:
+            tpl = None  # template sudah tidak ada: hasil tetap bisa dilihat & diekspor, gambar tidak
+            QMessageBox.information(self, APP_NAME, f"Template “{name}” tidak ditemukan. Gambar lembar tidak bisa ditampilkan, "
+                                    "tetapi nilai tetap bisa dilihat dan diekspor.")
+        self.store.folder = Path(fn).parent; self.store.tpl = tpl; self.store.cache = {}
         self.store.results = data.get("results", [])
         self.cur = None; self.store.changed.emit()
 
@@ -1198,6 +1261,11 @@ class ResultsTab(QWidget):
         except PermissionError:
             QMessageBox.warning(self, APP_NAME, "Berkas sedang dibuka di Excel. Tutup dulu, lalu coba lagi."); return
         QMessageBox.information(self, APP_NAME, f"Rekap tersimpan:\n{fn}")
+
+
+def _xl(v):
+    """Teks yang diawali "=" akan dianggap rumus oleh Excel — amankan sebagai teks biasa."""
+    return ("'" + v) if isinstance(v, str) and v.startswith("=") else v
 
 
 def export_excel(fn: str, st: ResultStore):
@@ -1240,7 +1308,7 @@ def export_excel(fn: str, st: ResultStore):
         vals = [i + 1, r.get("nomor", ""), r.get("nama", "")] + [fx.get(k, "") for k in extra] + [
                 g["benar"], g["salah"], g["kosong"], g["skor"], g["nilai"], ", ".join(note), r.get("label", "")]
         for c, v in enumerate(vals, 1):
-            ws.cell(R, c, v)
+            ws.cell(R, c, _xl(v))
         a = st.answers(r)
         for j, q in enumerate(qs):
             v = a.get(q, "")
@@ -1296,6 +1364,7 @@ class MainWindow(QMainWindow):
         self.resize(1280, 820)
         self.store = ResultStore()
         self.tabs = QTabWidget(); self.tabs.setDocumentMode(True)
+        T.style_tabs(self.tabs)
         self.t_tpl = TemplateTab()
         self.t_grade = GradeTab(self.store)
         self.t_res = ResultsTab(self.store)
@@ -1311,7 +1380,7 @@ class MainWindow(QMainWindow):
         tl.addWidget(label(APP_NAME, "appTitle"))
         hl.addLayout(tl); hl.addStretch()
         hl.addWidget(label(f"v{__version__}", "hint")); hl.addSpacing(8)
-        hl.addWidget(button("?  Panduan", slot=lambda: GuideDialog(self, self.tabs.currentIndex()).exec()))
+        hl.addWidget(button("?  Panduan", slot=lambda: exec_(GuideDialog(self, self.tabs.currentIndex()))))
         central = QWidget(); central.setObjectName("Page")
         cl = QVBoxLayout(central); cl.setContentsMargins(0, 0, 0, 0); cl.setSpacing(0)
         cl.addWidget(header); cl.addWidget(self.tabs, 1)
@@ -1335,13 +1404,42 @@ class MainWindow(QMainWindow):
         e.accept()
 
 
+def selftest() -> str:
+    """Cek cepat bahwa semua pustaka di dalam aplikasi terpaket bisa jalan (dipakai CI setelah build)."""
+    import tempfile
+    import openpyxl
+    from .qt import QT_VERSION
+    img = np.full((1200, 850), 250, np.uint8)
+    for r in range(10):
+        for c in range(4):
+            cv2.circle(img, (200 + c * 60, 300 + r * 50), 14, 0, 2)
+    b = omr.detect_bubbles(img)
+    assert len(b) >= 30, f"deteksi bulatan gagal ({len(b)})"
+    mu = omr._mupdf()
+    doc = mu.open(); doc.new_page(); assert len(doc) == 1
+    with tempfile.TemporaryDirectory() as d:
+        ok, buf = cv2.imencode(".png", img); buf.tofile(str(Path(d) / "x.png"))
+        assert omr.load_page(Path(d) / "x.png")[1].shape == img.shape
+        wb = openpyxl.Workbook(); wb.save(str(Path(d) / "x.xlsx"))
+    return f"SELFTEST OK · {QT_API} {QT_VERSION} · OpenCV {cv2.__version__} · {len(b)} bulatan"
+
+
 def main():
     QApplication.setOrganizationName("LanaAqil")
     QApplication.setApplicationName(APP_NAME)
+    prepare_app_attributes()
     app = QApplication(sys.argv)
     T.apply(app)
     w = MainWindow(); w.show()
-    sys.exit(app.exec())
+    if "--selftest" in sys.argv:
+        from .qt import QtCore
+        msg = selftest()
+        out = Path(sys.argv[sys.argv.index("--selftest") + 1]) if len(sys.argv) > sys.argv.index("--selftest") + 1 else None
+        if out:
+            out.write_text(msg, encoding="utf-8")
+        print(msg, flush=True)
+        QtCore.QTimer.singleShot(1500, app.quit)
+    sys.exit(exec_(app))
 
 
 if __name__ == "__main__":

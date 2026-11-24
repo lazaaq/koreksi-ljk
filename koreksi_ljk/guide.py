@@ -1,8 +1,7 @@
 """Panduan dalam aplikasi (pop-up), supaya layar utama tetap ringkas."""
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QDialog, QHBoxLayout, QTabWidget, QTextBrowser, QVBoxLayout
+from .qt import Qt, QDialog, QHBoxLayout, QTabWidget, QTextBrowser, QVBoxLayout
 
 from . import theme as T
 
@@ -115,6 +114,7 @@ class GuideDialog(QDialog):
             tabs.addTab(tb, title)
         tabs.setCurrentIndex(page)
         tabs.tabBar().setCursor(Qt.PointingHandCursor)
+        T.style_tabs(tabs)
         lay.addWidget(tabs, 1)
         row = QHBoxLayout(); row.addStretch()
         row.addWidget(T.button("Tutup", "primary", slot=self.accept))

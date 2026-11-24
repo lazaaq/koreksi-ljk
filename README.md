@@ -58,8 +58,8 @@ pip install -r requirements-dev.txt
 python run.py                                        # jalankan aplikasi
 
 python tests/make_synthetic.py tests/data            # buat LJK & scan sintetis
-python tests/test_accuracy.py                        # uji akurasi
-python tests/test_stress.py                          # uji pensil tipis / miring / 150 dpi
+python tests/bench_accuracy.py                        # uji akurasi
+python tests/bench_stress.py                          # uji pensil tipis / miring / 150 dpi
 python tests/gui_smoke.py /tmp/shots                 # uji GUI + tangkapan layar (offscreen)
 ```
 

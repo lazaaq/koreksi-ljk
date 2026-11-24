@@ -3,8 +3,8 @@ import json, os, shutil, sys, time
 from pathlib import Path
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from PySide6.QtWidgets import QApplication
-from PySide6.QtCore import QRectF
+from koreksi_ljk.qt import QApplication
+from koreksi_ljk.qt import QRectF
 from koreksi_ljk import app as A, omr
 
 D = Path(__file__).parent / "data"; OUT = Path(sys.argv[1] if len(sys.argv) > 1 else "/tmp/shots"); OUT.mkdir(exist_ok=True)
